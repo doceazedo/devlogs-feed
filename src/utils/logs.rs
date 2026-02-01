@@ -547,7 +547,12 @@ fn log_post_result(text: &str, b: &ScoreBreakdown, scores: Option<&MLScores>, ac
             "  {} {} {}",
             "Score:".bold(),
             pct(b.final_score).green().bold(),
-            format!("(rel:{} auth:{})", pct(b.relevance_score), signed_pct(b.authenticity_modifier)).dimmed()
+            format!(
+                "(rel:{} auth:{})",
+                pct(b.relevance_score),
+                signed_pct(b.authenticity_modifier)
+            )
+            .dimmed()
         );
         println!(
             "  {} {:.2} {}",
