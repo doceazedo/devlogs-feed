@@ -8,3 +8,5 @@ target
 *.db
 *.db-shm
 *.db-wal
+data/
+cache/

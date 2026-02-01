@@ -1,0 +1,21 @@
+services:
+  devlogs-feed:
+    build: .
+    env_file:
+      - .env
+    ports:
+      - "${PORT:-3030}:${PORT:-3030}"
+    volumes:
+      - ./data:/app/data
+      - ./cache:/root/.cache/huggingface
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -f http://localhost:$${PORT}/xrpc/app.bsky.feed.getFeedSkeleton?feed=",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
