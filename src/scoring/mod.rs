@@ -239,8 +239,7 @@ impl ScoreBreakdown {
         }
 
         let priority = base_score + priority_modifier + (multiplier - 1.0);
-        let final_score = priority.min(1.0);
-        let confidence = ConfidenceTier::from_score(final_score);
+        let confidence = ConfidenceTier::from_score(base_score);
 
         ScoreBreakdown {
             relevance_score: relevance,
@@ -262,7 +261,7 @@ impl ScoreBreakdown {
             boost_reasons,
             nerf_reasons,
             base_score,
-            final_score,
+            final_score: base_score,
             priority,
             confidence,
             negative_rejection: signals.negative_rejection,

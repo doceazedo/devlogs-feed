@@ -368,7 +368,7 @@ pub fn log_authenticity_signals(s: &ScoringSignals) {
 pub fn log_score_breakdown(b: &ScoreBreakdown) {
     println!(
         "  {} {}",
-        "Score calculation".bold(),
+        "Score".bold(),
         "(relevance×75% + (50%+auth)×25%)".dimmed()
     );
     println!(
@@ -383,21 +383,24 @@ pub fn log_score_breakdown(b: &ScoreBreakdown) {
         signed_pct(b.authenticity_modifier),
         pct((0.5 + b.authenticity_modifier) * 0.25)
     );
+
+    let score_colored = match b.confidence {
+        ConfidenceTier::Strong | ConfidenceTier::High => pct(b.final_score).green(),
+        ConfidenceTier::Moderate => pct(b.final_score).yellow(),
+        ConfidenceTier::Low => pct(b.final_score).red(),
+    };
     println!(
-        "  {} Base score:    {}\n",
+        "  {} {}         {} {}\n",
         tree(true).dimmed(),
-        pct(b.base_score)
+        "Score:".bold(),
+        score_colored.bold(),
+        format!("(threshold: {})", pct(MIN_FINAL_SCORE)).dimmed()
     );
 
     println!(
         "  {} {}",
-        "Priority calculation".bold(),
-        "(base score + priority mods + label)".dimmed()
-    );
-    println!(
-        "  {} Base score:      {}",
-        tree(false).dimmed(),
-        pct(b.base_score)
+        "Priority".bold(),
+        "(score + modifiers, for ranking)".dimmed()
     );
 
     let color_signed =
@@ -421,48 +424,30 @@ pub fn log_score_breakdown(b: &ScoreBreakdown) {
     let label = b.label_multiplier - 1.0;
 
     println!(
-        "  {} Video:           {}",
+        "  {} Video:         {}",
         tree(false).dimmed(),
         color_signed(video, |s| s.green(), |s| s.normal())
     );
     println!(
-        "  {} Many images:     {}",
+        "  {} Many images:   {}",
         tree(false).dimmed(),
         color_signed(imgs, |s| s.normal(), |s| s.yellow())
     );
     println!(
-        "  {} Promo penalty:   {}",
+        "  {} Promo:         {}",
         tree(false).dimmed(),
         color_signed(promo, |s| s.normal(), |s| s.yellow())
     );
     println!(
-        "  {} Label boost:     {}",
+        "  {} Label:         {}",
         tree(false).dimmed(),
         color_signed(label, |s| s.green(), |s| s.red())
     );
     println!(
-        "  {} Priority:        {:.2}\n",
+        "  {} {}       {:.2}",
         tree(true).dimmed(),
+        "Priority:".bold(),
         b.priority
-    );
-
-    println!("  {}", "Result".bold());
-    let score_colored = match b.confidence {
-        ConfidenceTier::Strong | ConfidenceTier::High => pct(b.final_score).green(),
-        ConfidenceTier::Moderate => pct(b.final_score).yellow(),
-        ConfidenceTier::Low => pct(b.final_score).red(),
-    };
-    println!(
-        "  {} Final score:   {} {}",
-        tree(false).dimmed(),
-        score_colored.bold(),
-        format!("(min(priority, 100%), threshold: {})", pct(MIN_FINAL_SCORE)).dimmed()
-    );
-    println!(
-        "  {} Priority:      {} {}",
-        tree(true).dimmed(),
-        format!("{:.2}", b.priority).bold(),
-        "(feed ranking, can exceed 100%)".dimmed()
     );
 }
 
@@ -494,9 +479,10 @@ pub fn log_final_result(accepted: bool, b: &ScoreBreakdown) {
         println!(
             "  {}",
             format!(
-                "Final score {} >= {} threshold",
+                "Score {} >= {} threshold (priority: {:.2})",
                 pct(b.final_score),
-                pct(MIN_FINAL_SCORE)
+                pct(MIN_FINAL_SCORE),
+                b.priority
             )
             .dimmed()
         );
@@ -517,7 +503,7 @@ pub fn log_final_result(accepted: bool, b: &ScoreBreakdown) {
         println!(
             "  {}",
             format!(
-                "Final score {} < {} threshold",
+                "Score {} < {} threshold",
                 pct(b.final_score),
                 pct(MIN_FINAL_SCORE)
             )
@@ -558,35 +544,20 @@ fn log_post_result(text: &str, b: &ScoreBreakdown, scores: Option<&MLScores>, ac
 
     if accepted {
         println!(
-            "  {} {}",
-            "Final score:".bold(),
-            pct(b.final_score).green().bold()
+            "  {} {} {}",
+            "Score:".bold(),
+            pct(b.final_score).green().bold(),
+            format!("(rel:{} auth:{})", pct(b.relevance_score), signed_pct(b.authenticity_modifier)).dimmed()
         );
         println!(
-            "  {}",
+            "  {} {:.2} {}",
+            "Priority:".bold(),
+            b.priority,
             format!(
-                "├─ Base score:   {} (rel:{} auth:{})",
-                pct(b.base_score),
-                pct(b.relevance_score),
-                signed_pct(b.authenticity_modifier)
-            )
-            .dimmed()
-        );
-        println!(
-            "  {}",
-            format!(
-                "├─ Priority mod: {} (video:{} imgs:{} promo:-{})",
-                signed_pct(b.priority_modifier),
+                "(video:{} imgs:{} promo:-{} label:{:+.0}%)",
                 if b.has_video { "yes" } else { "no" },
                 b.image_count,
-                pct(b.promo_penalty * 0.5)
-            )
-            .dimmed()
-        );
-        println!(
-            "  {}\n",
-            format!(
-                "└─ Label boost:  {:+.0}%",
+                pct(b.promo_penalty * 0.5),
                 (b.label_multiplier - 1.0) * 100.0
             )
             .dimmed()
@@ -607,7 +578,7 @@ fn log_post_result(text: &str, b: &ScoreBreakdown, scores: Option<&MLScores>, ac
     } else {
         println!(
             "  {} {} {}",
-            "Final score:".dimmed(),
+            "Score:".dimmed(),
             pct(b.final_score).red().bold(),
             format!("(need {})", pct(MIN_FINAL_SCORE)).dimmed()
         );
