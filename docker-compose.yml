@@ -6,8 +6,8 @@ services:
     ports:
       - "${PORT:-3030}:${PORT:-3030}"
     volumes:
-      - /data/bsky-feed/${DATABASE_URL:-feed.db}:/app/${DATABASE_URL:-feed.db}
-      - /data/bsky-feed/cache:/root/.cache/.rustbert
+      - ./${DATABASE_URL:-feed.db}:/app/${DATABASE_URL:-feed.db}
+      - ./cache:/root/.cache/.rustbert
     restart: unless-stopped
     healthcheck:
       test:
