@@ -4,11 +4,10 @@ use devlogs_feed::scoring::{
 };
 use devlogs_feed::utils::bluesky::{fetch_post, parse_bluesky_url};
 use devlogs_feed::utils::{
-    log_authenticity_signals, log_boost_nerf_reasons, log_dimmed, log_fetch_error, log_fetch_start,
-    log_fetch_success, log_final_result, log_generic_error, log_header, log_inference_start,
-    log_ml_scores, log_ml_step, log_newline, log_post_header, log_prefilter_length_fail,
-    log_prefilter_length_ok, log_prefilter_no_signals, log_prefilter_signals,
-    log_relevance_signals, log_score_breakdown,
+    log_authenticity_signals, log_dimmed, log_fetch_error, log_fetch_start, log_fetch_success,
+    log_final_result, log_generic_error, log_header, log_inference_start, log_ml_scores,
+    log_ml_step, log_newline, log_post_header, log_prefilter_length_fail, log_prefilter_length_ok,
+    log_prefilter_no_signals, log_prefilter_signals, log_relevance_signals, log_score_breakdown,
 };
 use std::env;
 use std::process;
@@ -148,7 +147,6 @@ async fn score_post(
     log_score_breakdown(&breakdown);
     log_newline();
 
-    log_boost_nerf_reasons(&breakdown);
     log_final_result(breakdown.passes(), &breakdown);
     log_newline();
 }

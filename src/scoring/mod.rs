@@ -158,6 +158,7 @@ pub struct ScoreBreakdown {
     pub image_count: usize,
     pub promo_penalty: f32,
     pub authenticity_modifier: f32,
+    pub priority_modifier: f32,
     pub boost_reasons: Vec<String>,
     pub nerf_reasons: Vec<String>,
     pub base_score: f32,
@@ -200,13 +201,17 @@ impl ScoreBreakdown {
             boost_reasons.push(format!("has media (+{:.0}%)", BONUS_MEDIA * 100.0));
         }
 
+        let base_score = (relevance * 0.75 + (0.5 + authenticity_modifier) * 0.25).clamp(0.0, 1.0);
+
+        let mut priority_modifier = 0.0;
+
         if signals.has_video {
-            authenticity_modifier += BONUS_VIDEO;
+            priority_modifier += BONUS_VIDEO;
             boost_reasons.push(format!("has video (+{:.0}%)", BONUS_VIDEO * 100.0));
         }
 
         if signals.image_count >= MANY_IMAGES_THRESHOLD {
-            authenticity_modifier -= PENALTY_MANY_IMAGES;
+            priority_modifier -= PENALTY_MANY_IMAGES;
             nerf_reasons.push(format!(
                 "{}+ images (-{:.0}%)",
                 MANY_IMAGES_THRESHOLD,
@@ -216,11 +221,9 @@ impl ScoreBreakdown {
 
         if signals.promo_penalty > 0.0 {
             let penalty = signals.promo_penalty * 0.5;
-            authenticity_modifier -= penalty;
+            priority_modifier -= penalty;
             nerf_reasons.push(format!("promo keywords (-{:.0}%)", penalty * 100.0));
         }
-
-        let base_score = (relevance * 0.75 + (0.5 + authenticity_modifier) * 0.25).clamp(0.0, 1.0);
 
         let multiplier = label_multiplier(&signals.classification_label);
         if multiplier > 1.0 {
@@ -235,7 +238,7 @@ impl ScoreBreakdown {
             ));
         }
 
-        let priority = relevance + authenticity_modifier + (multiplier - 1.0);
+        let priority = base_score + priority_modifier + (multiplier - 1.0);
         let final_score = priority.min(1.0);
         let confidence = ConfidenceTier::from_score(final_score);
 
@@ -255,6 +258,7 @@ impl ScoreBreakdown {
             image_count: signals.image_count,
             promo_penalty: signals.promo_penalty,
             authenticity_modifier,
+            priority_modifier,
             boost_reasons,
             nerf_reasons,
             base_score,
@@ -457,9 +461,7 @@ mod tests {
         signals.has_video = true;
         let breakdown_with_video = ScoreBreakdown::compute(&signals);
 
-        assert!(
-            breakdown_with_video.authenticity_modifier > breakdown_no_video.authenticity_modifier
-        );
+        assert!(breakdown_with_video.priority_modifier > breakdown_no_video.priority_modifier);
         assert!(breakdown_with_video
             .boost_reasons
             .iter()
@@ -481,10 +483,7 @@ mod tests {
         signals.image_count = 3;
         let breakdown_many_images = ScoreBreakdown::compute(&signals);
 
-        assert!(
-            breakdown_many_images.authenticity_modifier
-                < breakdown_few_images.authenticity_modifier
-        );
+        assert!(breakdown_many_images.priority_modifier < breakdown_few_images.priority_modifier);
         assert!(breakdown_many_images
             .nerf_reasons
             .iter()
