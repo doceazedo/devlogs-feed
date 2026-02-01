@@ -44,6 +44,21 @@ impl GameDevFeedHandler {
         )
     }
 
+    fn has_video(post: &Post) -> bool {
+        matches!(
+            &post.embed,
+            Some(Embed::Video(_)) | Some(Embed::QuoteWithMedia(_, skyfeed::MediaEmbed::Video(_)))
+        )
+    }
+
+    fn image_count(post: &Post) -> usize {
+        match &post.embed {
+            Some(Embed::Images(images)) => images.len(),
+            Some(Embed::QuoteWithMedia(_, skyfeed::MediaEmbed::Images(images))) => images.len(),
+            _ => 0,
+        }
+    }
+
     async fn score_post(&self, post: &Post) -> Option<ScoreBreakdown> {
         let text = post.text.clone();
 
@@ -64,6 +79,8 @@ impl GameDevFeedHandler {
         signals.hashtag_count = hashtag_count;
         signals.is_first_person = is_first_person(&text);
         signals.has_media = Self::has_media(post);
+        signals.has_video = Self::has_video(post);
+        signals.image_count = Self::image_count(post);
         let promo_breakdown = promo_penalty_detailed(&text);
         signals.promo_penalty = promo_breakdown.total_penalty;
         signals.promo_breakdown = promo_breakdown;

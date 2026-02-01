@@ -4,7 +4,8 @@ mod relevance;
 mod semantic;
 
 pub use authenticity::{
-    is_first_person, promo_penalty_detailed, PromoPenaltyBreakdown, BONUS_FIRST_PERSON, BONUS_MEDIA,
+    is_first_person, promo_penalty_detailed, PromoPenaltyBreakdown, BONUS_FIRST_PERSON,
+    BONUS_MEDIA, BONUS_VIDEO, MANY_IMAGES_THRESHOLD, PENALTY_MANY_IMAGES,
 };
 pub use classification::{label_multiplier, MLHandle, MLScores, WEIGHT_CLASSIFICATION};
 pub use relevance::{has_hashtags, has_keywords, strip_hashtags, WEIGHT_HASHTAG, WEIGHT_KEYWORD};
@@ -46,6 +47,10 @@ pub enum Bonus {
     FirstPerson,
     #[strum(serialize = "has-media")]
     HasMedia,
+    #[strum(serialize = "has-video")]
+    HasVideo,
+    #[strum(serialize = "many-images")]
+    ManyImages,
     #[strum(serialize = "promo-penalty")]
     PromoPenalty,
 }
@@ -96,6 +101,8 @@ pub struct ScoringSignals {
     pub classification_label: String,
     pub is_first_person: bool,
     pub has_media: bool,
+    pub has_video: bool,
+    pub image_count: usize,
     pub promo_penalty: f32,
     pub promo_breakdown: PromoPenaltyBreakdown,
     pub negative_rejection: bool,
@@ -116,6 +123,8 @@ impl ScoringSignals {
             classification_label: String::new(),
             is_first_person: false,
             has_media: false,
+            has_video: false,
+            image_count: 0,
             promo_penalty: 0.0,
             promo_breakdown: PromoPenaltyBreakdown::default(),
             negative_rejection: false,
@@ -145,6 +154,8 @@ pub struct ScoreBreakdown {
     pub label_multiplier: f32,
     pub is_first_person: bool,
     pub has_media: bool,
+    pub has_video: bool,
+    pub image_count: usize,
     pub promo_penalty: f32,
     pub authenticity_modifier: f32,
     pub boost_reasons: Vec<String>,
@@ -189,6 +200,20 @@ impl ScoreBreakdown {
             boost_reasons.push(format!("has media (+{:.0}%)", BONUS_MEDIA * 100.0));
         }
 
+        if signals.has_video {
+            authenticity_modifier += BONUS_VIDEO;
+            boost_reasons.push(format!("has video (+{:.0}%)", BONUS_VIDEO * 100.0));
+        }
+
+        if signals.image_count >= MANY_IMAGES_THRESHOLD {
+            authenticity_modifier -= PENALTY_MANY_IMAGES;
+            nerf_reasons.push(format!(
+                "{}+ images (-{:.0}%)",
+                MANY_IMAGES_THRESHOLD,
+                PENALTY_MANY_IMAGES * 100.0
+            ));
+        }
+
         if signals.promo_penalty > 0.0 {
             let penalty = signals.promo_penalty * 0.5;
             authenticity_modifier -= penalty;
@@ -226,6 +251,8 @@ impl ScoreBreakdown {
             label_multiplier: multiplier,
             is_first_person: signals.is_first_person,
             has_media: signals.has_media,
+            has_video: signals.has_video,
+            image_count: signals.image_count,
             promo_penalty: signals.promo_penalty,
             authenticity_modifier,
             boost_reasons,
@@ -312,7 +339,14 @@ impl EvaluationResult {
     }
 }
 
-pub async fn evaluate_post(text: &str, has_media: bool, ml_handle: &MLHandle) -> EvaluationResult {
+#[derive(Debug, Clone, Default)]
+pub struct MediaInfo {
+    pub has_media: bool,
+    pub has_video: bool,
+    pub image_count: usize,
+}
+
+pub async fn evaluate_post(text: &str, media: MediaInfo, ml_handle: &MLHandle) -> EvaluationResult {
     if let Some(filter) = should_prefilter(text, Some("en")) {
         return EvaluationResult::Prefiltered(filter);
     }
@@ -335,7 +369,9 @@ pub async fn evaluate_post(text: &str, has_media: bool, ml_handle: &MLHandle) ->
     signals.classification_score = scores.classification_score;
     signals.classification_label = scores.best_label.clone();
     signals.is_first_person = is_first_person(text);
-    signals.has_media = has_media;
+    signals.has_media = media.has_media;
+    signals.has_video = media.has_video;
+    signals.image_count = media.image_count;
     let promo = promo_penalty_detailed(text);
     signals.promo_penalty = promo.total_penalty;
     signals.promo_breakdown = promo;
@@ -406,5 +442,52 @@ mod tests {
         let breakdown = ScoreBreakdown::compute(&signals);
         assert!(!breakdown.passes());
         assert!(breakdown.final_score < MIN_FINAL_SCORE);
+    }
+
+    #[test]
+    fn test_bonus_video() {
+        let mut signals = ScoringSignals::new();
+        signals.has_keywords = true;
+        signals.semantic_score = 0.5;
+        signals.classification_score = 0.5;
+        signals.classification_label = "other".to_string();
+
+        let breakdown_no_video = ScoreBreakdown::compute(&signals);
+
+        signals.has_video = true;
+        let breakdown_with_video = ScoreBreakdown::compute(&signals);
+
+        assert!(
+            breakdown_with_video.authenticity_modifier > breakdown_no_video.authenticity_modifier
+        );
+        assert!(breakdown_with_video
+            .boost_reasons
+            .iter()
+            .any(|r| r.contains("video")));
+    }
+
+    #[test]
+    fn test_penalty_many_images() {
+        let mut signals = ScoringSignals::new();
+        signals.has_keywords = true;
+        signals.semantic_score = 0.5;
+        signals.classification_score = 0.5;
+        signals.classification_label = "other".to_string();
+        signals.has_media = true;
+        signals.image_count = 2;
+
+        let breakdown_few_images = ScoreBreakdown::compute(&signals);
+
+        signals.image_count = 3;
+        let breakdown_many_images = ScoreBreakdown::compute(&signals);
+
+        assert!(
+            breakdown_many_images.authenticity_modifier
+                < breakdown_few_images.authenticity_modifier
+        );
+        assert!(breakdown_many_images
+            .nerf_reasons
+            .iter()
+            .any(|r| r.contains("images")));
     }
 }

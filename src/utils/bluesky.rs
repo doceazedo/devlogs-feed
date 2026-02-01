@@ -26,6 +26,8 @@ struct PostContent {
 pub struct FetchedPost {
     pub text: String,
     pub has_media: bool,
+    pub has_video: bool,
+    pub image_count: usize,
 }
 
 pub fn parse_bluesky_url(input: &str) -> Option<String> {
@@ -70,8 +72,53 @@ pub async fn fetch_post(at_uri: &str) -> Result<FetchedPost, String> {
         .await
         .map_err(|e| format!("Failed to parse response: {}", e))?;
 
+    let (has_media, has_video, image_count) = extract_media_info(&thread.thread.post.embed);
+
     Ok(FetchedPost {
         text: thread.thread.post.record.text,
-        has_media: thread.thread.post.embed.is_some(),
+        has_media,
+        has_video,
+        image_count,
     })
+}
+
+fn extract_media_info(embed: &Option<serde_json::Value>) -> (bool, bool, usize) {
+    let Some(embed) = embed else {
+        return (false, false, 0);
+    };
+
+    let embed_type = embed.get("$type").and_then(|t| t.as_str()).unwrap_or("");
+
+    match embed_type {
+        "app.bsky.embed.video#view" => (true, true, 0),
+        "app.bsky.embed.images#view" => {
+            let count = embed
+                .get("images")
+                .and_then(|i| i.as_array())
+                .map(|arr| arr.len())
+                .unwrap_or(0);
+            (count > 0, false, count)
+        }
+        "app.bsky.embed.recordWithMedia#view" => {
+            let media = embed.get("media");
+            if let Some(media) = media {
+                let media_type = media.get("$type").and_then(|t| t.as_str()).unwrap_or("");
+                match media_type {
+                    "app.bsky.embed.video#view" => (true, true, 0),
+                    "app.bsky.embed.images#view" => {
+                        let count = media
+                            .get("images")
+                            .and_then(|i| i.as_array())
+                            .map(|arr| arr.len())
+                            .unwrap_or(0);
+                        (count > 0, false, count)
+                    }
+                    _ => (false, false, 0),
+                }
+            } else {
+                (false, false, 0)
+            }
+        }
+        _ => (false, false, 0),
+    }
 }

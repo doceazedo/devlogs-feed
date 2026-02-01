@@ -44,13 +44,14 @@ async fn main() {
         .collect::<Vec<_>>()
         .join(" ");
 
-    let (text, has_media) = if let Some(at_uri) = parse_bluesky_url(&input) {
+    let (text, has_media, has_video, image_count) = if let Some(at_uri) = parse_bluesky_url(&input)
+    {
         log_fetch_start(&at_uri);
 
         match fetch_post(&at_uri).await {
             Ok(post) => {
                 log_fetch_success();
-                (post.text, post.has_media)
+                (post.text, post.has_media, post.has_video, post.image_count)
             }
             Err(e) => {
                 log_fetch_error(&e);
@@ -58,7 +59,7 @@ async fn main() {
             }
         }
     } else {
-        (input, has_media_flag)
+        (input, has_media_flag, false, 0)
     };
 
     log_newline();
@@ -73,10 +74,16 @@ async fn main() {
     };
 
     tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
-    score_post(&text, has_media, &ml_handle).await;
+    score_post(&text, has_media, has_video, image_count, &ml_handle).await;
 }
 
-async fn score_post(text: &str, has_media: bool, ml_handle: &MLHandle) {
+async fn score_post(
+    text: &str,
+    has_media: bool,
+    has_video: bool,
+    image_count: usize,
+    ml_handle: &MLHandle,
+) {
     log_post_header(text, has_media);
     log_newline();
 
@@ -119,6 +126,8 @@ async fn score_post(text: &str, has_media: bool, ml_handle: &MLHandle) {
     signals.classification_label = scores.best_label.clone();
     signals.is_first_person = is_first_person(text);
     signals.has_media = has_media;
+    signals.has_video = has_video;
+    signals.image_count = image_count;
     let promo = promo_penalty_detailed(text);
     signals.promo_penalty = promo.total_penalty;
     signals.promo_breakdown = promo;
@@ -146,14 +155,18 @@ async fn score_post(text: &str, has_media: bool, ml_handle: &MLHandle) {
 
 #[cfg(test)]
 mod tests {
-    use devlogs_feed::scoring::{evaluate_post, MLHandle};
+    use devlogs_feed::scoring::{evaluate_post, MLHandle, MediaInfo};
     use devlogs_feed::utils::bluesky::{fetch_post, parse_bluesky_url};
 
-    const POSTS_EXPECTED_ACCEPT: &[&str] =
-        &["https://bsky.app/profile/did:plc:uthii4i7zrmqnbxex5esjxzp/post/3maqv5l6xl22y"];
+    const POSTS_EXPECTED_ACCEPT: &[&str] = &[
+        "at://did:plc:uthii4i7zrmqnbxex5esjxzp/app.bsky.feed.post/3maqv5l6xl22y",
+        "at://did:plc:jguiyddnwoie7ddpfjsgacbk/app.bsky.feed.post/3mdt3m3fq422g",
+    ];
 
-    const POSTS_EXPECTED_REJECT: &[&str] =
-        &["https://bsky.app/profile/did:plc:yrry24lfrtfzidba3kbmgdwm/post/3mdrpa7d4qi2b"];
+    const POSTS_EXPECTED_REJECT: &[&str] = &[
+        "at://did:plc:yrry24lfrtfzidba3kbmgdwm/app.bsky.feed.post/3mdrpa7d4qi2b",
+        "at://did:plc:uyx65egegsinxxncka7m5ijy/app.bsky.feed.post/3mdt43fab2s2y",
+    ];
 
     async fn evaluate_urls(urls: &[&str], ml_handle: &MLHandle, expect_pass: bool) {
         for url in urls {
@@ -162,7 +175,12 @@ mod tests {
                 .await
                 .unwrap_or_else(|e| panic!("Failed to fetch {}: {}", url, e));
 
-            let result = evaluate_post(&post.text, post.has_media, ml_handle).await;
+            let media = MediaInfo {
+                has_media: post.has_media,
+                has_video: post.has_video,
+                image_count: post.image_count,
+            };
+            let result = evaluate_post(&post.text, media, ml_handle).await;
             let passes = result.passes();
 
             if expect_pass {

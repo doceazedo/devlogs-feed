@@ -17,8 +17,6 @@ pub enum ClassificationLabel {
     // good :)
     #[strum(to_string = "game developer sharing their own work")]
     GameDevSharingWork,
-    #[strum(to_string = "game development progress, devlog or art")]
-    GameDevProgress,
     #[strum(to_string = "game programming or technical development")]
     GameProgramming,
 
@@ -31,8 +29,10 @@ pub enum ClassificationLabel {
     Marketing,
     #[strum(to_string = "job posting or job search")]
     JobPosting,
-    #[strum(to_string = "generative AI, crypto or NFT")]
-    Slop,
+    #[strum(to_string = "AI generated")]
+    GenAi,
+    #[strum(to_string = "crypto or NFT related")]
+    CryptoAndNFTs,
     #[strum(to_string = "unrelated")]
     Unrelated,
 }
@@ -45,13 +45,13 @@ impl ClassificationLabel {
     pub fn multiplier(&self) -> f32 {
         match self {
             Self::GameDevSharingWork => 2.0,
-            Self::GameDevProgress => 1.8,
             Self::GameProgramming => 1.2,
             Self::GamerDiscussing => 0.8,
             Self::GameReview => 0.6,
             Self::Marketing => 0.2,
             Self::JobPosting => 0.2,
-            Self::Slop => 0.0,
+            Self::GenAi => 0.0,
+            Self::CryptoAndNFTs => 0.0,
             Self::Unrelated => 0.2,
         }
     }

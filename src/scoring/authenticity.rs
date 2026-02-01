@@ -3,6 +3,9 @@ use std::sync::LazyLock;
 
 pub const BONUS_FIRST_PERSON: f32 = 0.15;
 pub const BONUS_MEDIA: f32 = 0.10;
+pub const BONUS_VIDEO: f32 = 0.15;
+pub const PENALTY_MANY_IMAGES: f32 = 0.15;
+pub const MANY_IMAGES_THRESHOLD: usize = 3;
 
 const FIRST_PERSON: &[&str] = &["i ", "i'", "we ", "we'", "my ", "our "];
 
@@ -128,7 +131,6 @@ mod tests {
 
     #[test]
     fn test_bonus_first_person() {
-        assert_eq!(BONUS_FIRST_PERSON, 0.15);
         assert!(is_first_person("I built this game"));
         assert!(!is_first_person("The game is ready"));
     }

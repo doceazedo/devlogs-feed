@@ -163,6 +163,8 @@ pub fn log_bonus_applied(bonus: Bonus, val: f32) {
         Bonus::Classification => "Classification",
         Bonus::FirstPerson => "First person",
         Bonus::HasMedia => "Has media",
+        Bonus::HasVideo => "Has video",
+        Bonus::ManyImages => "Many images",
         Bonus::PromoPenalty => "Promo penalty",
     };
 
@@ -198,7 +200,7 @@ pub fn log_scoring_result(breakdown: &ScoreBreakdown) {
         "no".red().to_string()
     };
 
-    log_header("Relevance signals:");
+    log_header("  Relevance signals:");
     println!(
         "  {} Keywords:       {} {}",
         "├─".dimmed(),
@@ -225,7 +227,7 @@ pub fn log_scoring_result(breakdown: &ScoreBreakdown) {
     );
     println!();
 
-    log_header("Authenticity signals:");
+    log_header("  Authenticity signals:");
     println!(
         "  {} First person:   {} {}",
         "├─".dimmed(),
@@ -247,7 +249,7 @@ pub fn log_scoring_result(breakdown: &ScoreBreakdown) {
         "(+10% if yes)".dimmed()
     );
     println!(
-        "  {} Promo penalty:  {}",
+        "  {} Promo penalty:   {}",
         "└─".dimmed(),
         if breakdown.promo_penalty > 0.0 {
             format!("-{:.0}%", breakdown.promo_penalty * 50.0)
@@ -291,14 +293,14 @@ pub fn log_scoring_result(breakdown: &ScoreBreakdown) {
     println!(
         "  {} {} {} {}",
         "├─".dimmed(),
-        "Final score:".bold(),
+        "Final score:  ".bold(),
         colored_score.bold(),
         format!("(threshold: {:.0}%)", MIN_FINAL_SCORE * 100.0).dimmed()
     );
     println!(
         "  {} {} {:.2}",
         "└─".dimmed(),
-        "Priority:".bold(),
+        "Priority:     ".bold(),
         breakdown.priority
     );
 }
@@ -455,7 +457,7 @@ pub fn log_relevance_signals(signals: &ScoringSignals) {
         "no".red().to_string()
     };
 
-    log_header("Relevance signals:");
+    log_header("  Relevance signals:");
     println!(
         "  {} Keywords:       {} {}",
         "├─".dimmed(),
@@ -483,7 +485,7 @@ pub fn log_relevance_signals(signals: &ScoringSignals) {
 }
 
 pub fn log_authenticity_signals(signals: &ScoringSignals) {
-    log_header("Authenticity signals:");
+    log_header("  Authenticity signals:");
     println!(
         "  {} First person:    {} {}",
         "├─".dimmed(),
@@ -508,13 +510,13 @@ pub fn log_authenticity_signals(signals: &ScoringSignals) {
     let penalty_pct = signals.promo_penalty * 50.0;
     if signals.promo_penalty > 0.0 {
         println!(
-            "  {} Promo penalty:  {}",
+            "  {} Promo penalty:   {}",
             "└─".dimmed(),
             format!("-{:.0}%", penalty_pct).yellow()
         );
         log_promo_breakdown(&signals.promo_breakdown);
     } else {
-        println!("  {} Promo penalty:  -0%", "└─".dimmed());
+        println!("  {} Promo penalty:   -0%", "└─".dimmed());
     }
 }
 
@@ -600,14 +602,14 @@ pub fn log_score_breakdown(breakdown: &ScoreBreakdown) {
     println!(
         "{} {} {} {}",
         "├─".dimmed(),
-        "Final score:".bold(),
+        "Final score:  ".bold(),
         colored_score.bold(),
         format!("(threshold: {:.0}%)", MIN_FINAL_SCORE * 100.0).dimmed()
     );
     println!(
         "{} {} {:.2}",
         "└─".dimmed(),
-        "Priority:".bold(),
+        "Priority:     ".bold(),
         breakdown.priority
     );
 }
@@ -668,7 +670,7 @@ pub fn log_accepted_post(text: &str, breakdown: &ScoreBreakdown, scores: &MLScor
     println!();
     println!(
         "  {} {}",
-        "Final Score:".bold(),
+        "Final score:".bold(),
         format!("{:.0}%", breakdown.final_score * 100.0)
             .green()
             .bold()
@@ -737,7 +739,7 @@ pub fn log_rejected_post(text: &str, breakdown: &ScoreBreakdown) {
     println!();
     println!(
         "  {} {} {}",
-        "Final Score:".dimmed(),
+        "Final score:".dimmed(),
         format!("{:.0}%", breakdown.final_score * 100.0)
             .red()
             .bold(),
