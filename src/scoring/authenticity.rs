@@ -74,7 +74,7 @@ pub struct PromoPenaltyBreakdown {
     pub total_penalty: f32,
 }
 
-pub fn promo_penalty_detailed(text: &str) -> PromoPenaltyBreakdown {
+pub fn promo_penalty(text: &str) -> PromoPenaltyBreakdown {
     let text_lower = text.to_lowercase();
     let mut breakdown = PromoPenaltyBreakdown::default();
 
@@ -121,10 +121,6 @@ pub fn promo_penalty_detailed(text: &str) -> PromoPenaltyBreakdown {
     breakdown
 }
 
-pub fn promo_penalty(text: &str) -> f32 {
-    promo_penalty_detailed(text).total_penalty
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -137,14 +133,13 @@ mod tests {
 
     #[test]
     fn test_promo_penalty_keywords() {
-        let penalty = promo_penalty("Wishlist now on Steam!");
+        let penalty = promo_penalty("Wishlist now on Steam!").total_penalty;
         assert!((penalty - 0.15).abs() < 0.01);
     }
 
     #[test]
     fn test_promo_penalty_domains() {
-        let breakdown =
-            promo_penalty_detailed("Check it out! https://store.steampowered.com/app/123");
+        let breakdown = promo_penalty("Check it out! https://store.steampowered.com/app/123");
         assert!(breakdown.has_link);
         assert_eq!(breakdown.promo_link_count, 1);
     }
@@ -152,7 +147,7 @@ mod tests {
     #[test]
     fn test_promo_penalty_capped() {
         let text = "Wishlist! Buy now! Available now! Pre-order! On sale! Discount! #promo #ad #giveaway https://store.steampowered.com/app/123 https://itch.io/game";
-        let breakdown = promo_penalty_detailed(text);
+        let breakdown = promo_penalty(text);
         assert!(breakdown.total_penalty <= MAX_PROMO_PENALTY);
     }
 }

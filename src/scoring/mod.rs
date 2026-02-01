@@ -4,8 +4,8 @@ mod relevance;
 mod semantic;
 
 pub use authenticity::{
-    is_first_person, promo_penalty_detailed, PromoPenaltyBreakdown, BONUS_FIRST_PERSON,
-    BONUS_MEDIA, BONUS_VIDEO, MANY_IMAGES_THRESHOLD, PENALTY_MANY_IMAGES,
+    is_first_person, promo_penalty, PromoPenaltyBreakdown, BONUS_FIRST_PERSON, BONUS_MEDIA,
+    BONUS_VIDEO, MANY_IMAGES_THRESHOLD, PENALTY_MANY_IMAGES,
 };
 pub use classification::{label_multiplier, MLHandle, MLScores, WEIGHT_CLASSIFICATION};
 pub use relevance::{has_hashtags, has_keywords, strip_hashtags, WEIGHT_HASHTAG, WEIGHT_KEYWORD};
@@ -376,7 +376,7 @@ pub async fn evaluate_post(text: &str, media: MediaInfo, ml_handle: &MLHandle) -
     signals.has_media = media.has_media;
     signals.has_video = media.has_video;
     signals.image_count = media.image_count;
-    let promo = promo_penalty_detailed(text);
+    let promo = promo_penalty(text);
     signals.promo_penalty = promo.total_penalty;
     signals.promo_breakdown = promo;
     signals.negative_rejection = scores.negative_rejection;

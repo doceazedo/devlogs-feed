@@ -1,7 +1,7 @@
 use crate::db::{self, DbPool, NewLike, NewPost};
 use crate::scoring::{
-    apply_time_decay, has_hashtags, has_keywords, is_first_person, promo_penalty_detailed,
-    should_prefilter, MLHandle, PostScorer, ScoreBreakdown, ScoringSignals,
+    apply_time_decay, has_hashtags, has_keywords, is_first_person, promo_penalty, should_prefilter,
+    MLHandle, PostScorer, ScoreBreakdown, ScoringSignals,
 };
 use crate::utils::{log_accepted_post, log_feed_error, log_feed_served, log_rejected_post};
 use chrono::Utc;
@@ -81,7 +81,7 @@ impl GameDevFeedHandler {
         signals.has_media = Self::has_media(post);
         signals.has_video = Self::has_video(post);
         signals.image_count = Self::image_count(post);
-        let promo_breakdown = promo_penalty_detailed(&text);
+        let promo_breakdown = promo_penalty(&text);
         signals.promo_penalty = promo_breakdown.total_penalty;
         signals.promo_breakdown = promo_breakdown;
 

@@ -87,9 +87,6 @@ pub fn log_ml_loading(step: &str) {
 pub fn log_ml_ready() {
     println!("{} Ready to score posts!", "[ML]".green());
 }
-pub fn log_ml_shutdown() {
-    println!("{} Worker shutting down", "[ML]".yellow());
-}
 pub fn log_ml_error(message: &str) {
     eprintln!("{} {message}", "[ML ERROR]".red());
 }

@@ -7,7 +7,7 @@ use std::time::Instant;
 use strum::{Display, EnumIter, IntoEnumIterator, IntoStaticStr};
 
 use super::semantic::{compute_reference_embeddings, semantic_similarity};
-use crate::utils::{log_ml_error, log_ml_model_loaded, log_ml_ready, log_ml_shutdown, log_ml_step};
+use crate::utils::{log_ml_error, log_ml_model_loaded, log_ml_ready, log_ml_step};
 
 pub const WEIGHT_CLASSIFICATION: f32 = 0.50;
 pub const NEGATIVE_REJECTION_THRESHOLD: f32 = 0.70;
@@ -94,7 +94,6 @@ pub enum MLRequest {
         text: String,
         response_tx: tokio::sync::oneshot::Sender<MLScores>,
     },
-    Shutdown,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -154,28 +153,21 @@ fn run_ml_worker(request_rx: mpsc::Receiver<MLRequest>) -> Result<()> {
     log_ml_ready();
 
     for request in request_rx {
-        match request {
-            MLRequest::Score { text, response_tx } => {
-                let classification = classify(&classifier, &text);
-                let (semantic_score, best_ref_idx) =
-                    semantic_similarity(&embeddings, &reference_embeddings, &text);
+        let MLRequest::Score { text, response_tx } = request;
+        let classification = classify(&classifier, &text);
+        let (semantic_score, best_ref_idx) =
+            semantic_similarity(&embeddings, &reference_embeddings, &text);
 
-                let _ = response_tx.send(MLScores {
-                    classification_score: classification.score,
-                    semantic_score,
-                    best_label: classification.best_label,
-                    best_label_score: classification.best_label_score,
-                    best_reference_idx: best_ref_idx,
-                    all_labels: classification.all_labels,
-                    is_negative_label: classification.is_negative_label,
-                    negative_rejection: classification.negative_rejection,
-                });
-            }
-            MLRequest::Shutdown => {
-                log_ml_shutdown();
-                break;
-            }
-        }
+        let _ = response_tx.send(MLScores {
+            classification_score: classification.score,
+            semantic_score,
+            best_label: classification.best_label,
+            best_label_score: classification.best_label_score,
+            best_reference_idx: best_ref_idx,
+            all_labels: classification.all_labels,
+            is_negative_label: classification.is_negative_label,
+            negative_rejection: classification.negative_rejection,
+        });
     }
 
     Ok(())

@@ -1,6 +1,6 @@
 use devlogs_feed::scoring::{
-    has_hashtags, has_keywords, is_first_person, promo_penalty_detailed, should_prefilter,
-    strip_hashtags, Filter, MLHandle, PostScorer, ScoringSignals, MIN_TEXT_LENGTH,
+    has_hashtags, has_keywords, is_first_person, promo_penalty, should_prefilter, strip_hashtags,
+    Filter, MLHandle, PostScorer, ScoringSignals, MIN_TEXT_LENGTH,
 };
 use devlogs_feed::utils::bluesky::{fetch_post, parse_bluesky_url};
 use devlogs_feed::utils::{
@@ -127,7 +127,7 @@ async fn score_post(
     signals.has_media = has_media;
     signals.has_video = has_video;
     signals.image_count = image_count;
-    let promo = promo_penalty_detailed(text);
+    let promo = promo_penalty(text);
     signals.promo_penalty = promo.total_penalty;
     signals.promo_breakdown = promo;
     signals.negative_rejection = scores.negative_rejection;
