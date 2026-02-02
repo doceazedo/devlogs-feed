@@ -118,6 +118,20 @@ pub fn log_cleanup_done(deleted: usize) {
     println!("{} Cleaned up {} old posts", "[DB]".cyan(), deleted);
 }
 
+pub fn log_backfill_start() {
+    println!("{} Searching for recent posts to backfill...", "[BACKFILL]".yellow());
+}
+pub fn log_backfill_done(count: usize) {
+    if count > 0 {
+        println!("{} Backfilled {} posts", "[BACKFILL]".green(), count);
+    } else {
+        println!("{} No new posts to backfill", "[BACKFILL]".green());
+    }
+}
+pub fn log_backfill_error(message: &str) {
+    eprintln!("{} {}", "[BACKFILL ERROR]".red(), message);
+}
+
 pub fn log_server_starting(port: u16) {
     println!(
         "\n{} Starting on port {}\n════════════════════════════════════════\n",
