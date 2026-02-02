@@ -167,7 +167,6 @@ pub fn log_backfill_query_failed(query: &str, error: &str) {
 
 pub fn log_backfill_stats(
     duplicates: usize,
-    too_old: usize,
     filtered: usize,
     no_relevance: usize,
     ml_rejected: usize,
@@ -181,13 +180,6 @@ pub fn log_backfill_stats(
         tree_branch(),
         pad_label("duplicates", 2),
         dim().apply_to(duplicates)
-    );
-    println!(
-        "{}{}{} {}",
-        tree_indent(),
-        tree_branch(),
-        pad_label("too old", 2),
-        dim().apply_to(too_old)
     );
     println!(
         "{}{}{} {}",
@@ -230,8 +222,8 @@ pub fn log_backfill_progress(current: usize, total: usize) {
 
 pub fn log_backfill_complete(total_accepted: usize, total_processed: usize) {
     println!(
-        "{} {}/{} posts accepted",
-        backfill_prefix(),
+        "{}{}/{} posts accepted",
+        tree_end(),
         bold().apply_to(total_accepted),
         dim().apply_to(total_processed)
     );

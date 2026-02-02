@@ -200,13 +200,18 @@ pub async fn search_posts(
     access_token: &str,
     query: &str,
     limit: u32,
+    since: Option<&str>,
 ) -> Result<Vec<SearchPost>, String> {
-    let url = format!(
-        "{}/app.bsky.feed.searchPosts?q={}&limit={}",
+    let mut url = format!(
+        "{}/app.bsky.feed.searchPosts?q={}&limit={}&lang=en&sort=top",
         AUTH_API_BASE,
         urlencoding::encode(query),
         limit
     );
+
+    if let Some(since_ts) = since {
+        url.push_str(&format!("&since={}", urlencoding::encode(since_ts)));
+    }
 
     let response = client
         .get(&url)

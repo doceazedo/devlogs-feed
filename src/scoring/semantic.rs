@@ -40,16 +40,17 @@ pub fn compute_reference_embeddings() -> Result<(SentenceEmbeddingsModel, Vec<Ve
     Ok((embeddings, reference_embeddings))
 }
 
-pub fn semantic_similarity(
+pub fn semantic_similarity_batch(
     embeddings: &SentenceEmbeddingsModel,
     reference_embeddings: &[Vec<f32>],
-    text: &str,
-) -> (f32, usize) {
-    let result = embeddings.encode(&[text]);
+    texts: &[&str],
+) -> Vec<(f32, usize)> {
+    let result = embeddings.encode(texts);
 
     match result {
-        Ok(text_embeddings) => {
-            if let Some(text_embedding) = text_embeddings.first() {
+        Ok(text_embeddings) => text_embeddings
+            .iter()
+            .map(|text_embedding| {
                 let mut best_idx = 0;
                 let mut best_sim = 0.0_f32;
 
@@ -62,11 +63,9 @@ pub fn semantic_similarity(
                 }
 
                 (best_sim, best_idx)
-            } else {
-                (0.0, 0)
-            }
-        }
-        Err(_) => (0.0, 0),
+            })
+            .collect(),
+        Err(_) => vec![(0.0, 0); texts.len()],
     }
 }
 

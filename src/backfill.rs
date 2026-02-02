@@ -10,7 +10,7 @@ use chrono::Utc;
 
 pub const BACKFILL_LIMIT: usize = 100;
 pub const BACKFILL_HOURS: i64 = 96;
-const SEARCH_LIMIT: u32 = 50;
+const SEARCH_LIMIT: u32 = 25;
 
 pub async fn run_backfill(pool: DbPool, ml_handle: &MLHandle) {
     logs::log_backfill_start();
@@ -26,11 +26,14 @@ pub async fn run_backfill(pool: DbPool, ml_handle: &MLHandle) {
     };
 
     let search_queries = vec!["gamedev", "indiedev", "devlog", "game development"];
+    let since = (Utc::now() - chrono::Duration::hours(BACKFILL_HOURS))
+        .format("%Y-%m-%dT%H:%M:%SZ")
+        .to_string();
 
     let mut all_posts: Vec<SearchPost> = Vec::new();
 
     for query in &search_queries {
-        match search_posts(&client, &access_token, query, SEARCH_LIMIT).await {
+        match search_posts(&client, &access_token, query, SEARCH_LIMIT, Some(&since)).await {
             Ok(posts) => {
                 logs::log_backfill_query(query, posts.len());
                 all_posts.extend(posts);
@@ -55,19 +58,20 @@ pub async fn run_backfill(pool: DbPool, ml_handle: &MLHandle) {
         Err(_) => return,
     };
 
-    let cutoff = Utc::now().timestamp() - (BACKFILL_HOURS * 3600);
     let total_to_process = all_posts.len().min(BACKFILL_LIMIT);
     let mut new_posts: Vec<NewPost> = Vec::new();
     let mut current = 0;
     let mut processed = 0;
     let mut duplicates = 0;
-    let mut too_old = 0;
     let mut filtered = 0;
     let mut no_relevance = 0;
     let mut ml_rejected = 0;
     let mut below_threshold = 0;
 
     for post in all_posts.iter().take(BACKFILL_LIMIT) {
+        current += 1;
+        logs::log_backfill_progress(current, total_to_process);
+
         if db::post_exists(&mut conn, &post.uri) {
             duplicates += 1;
             continue;
@@ -76,11 +80,6 @@ pub async fn run_backfill(pool: DbPool, ml_handle: &MLHandle) {
         let timestamp = chrono::DateTime::parse_from_rfc3339(&post.indexed_at)
             .map(|dt| dt.timestamp())
             .unwrap_or_else(|_| Utc::now().timestamp());
-
-        if timestamp < cutoff {
-            too_old += 1;
-            continue;
-        }
 
         processed += 1;
 
@@ -148,8 +147,6 @@ pub async fn run_backfill(pool: DbPool, ml_handle: &MLHandle) {
         let passed = passes_threshold(&breakdown);
         assessment.set_threshold_result(passed, breakdown.final_priority);
         assessment.print();
-        current += 1;
-        logs::log_backfill_progress(current, total_to_process);
 
         if passed {
             let new_post = NewPost {
@@ -190,7 +187,6 @@ pub async fn run_backfill(pool: DbPool, ml_handle: &MLHandle) {
     let accepted = new_posts.len();
     logs::log_backfill_stats(
         duplicates,
-        too_old,
         filtered,
         no_relevance,
         ml_rejected,

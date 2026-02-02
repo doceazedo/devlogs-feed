@@ -3,11 +3,14 @@ use rust_bert::pipelines::zero_shot_classification::ZeroShotClassificationModel;
 use std::str::FromStr;
 use std::sync::mpsc;
 use std::thread;
+use std::time::Duration;
 use strum::{Display, EnumIter, IntoEnumIterator, IntoStaticStr};
 
-use super::semantic::{compute_reference_embeddings, semantic_similarity};
+use super::semantic::{compute_reference_embeddings, semantic_similarity_batch};
 
 pub const WEIGHT_CLASSIFICATION: f32 = 0.50;
+pub const ML_BATCH_SIZE: usize = 16;
+pub const ML_BATCH_TIMEOUT_MS: u64 = 10;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Display, EnumIter, IntoStaticStr)]
 pub enum TopicLabel {
@@ -170,46 +173,80 @@ impl MLHandle {
 fn run_ml_worker(request_rx: mpsc::Receiver<MLRequest>) -> Result<()> {
     let classifier = ZeroShotClassificationModel::new(Default::default())?;
     let (embeddings, reference_embeddings) = compute_reference_embeddings()?;
+    let batch_timeout = Duration::from_millis(ML_BATCH_TIMEOUT_MS);
 
-    for request in request_rx {
-        let MLRequest::Score { text, response_tx } = request;
-        let topic = classify_topic(&classifier, &text);
-        let quality = assess_quality(&classifier, &text);
-        let (semantic_score, best_ref_idx) =
-            semantic_similarity(&embeddings, &reference_embeddings, &text);
+    loop {
+        let mut batch: Vec<(String, tokio::sync::oneshot::Sender<MLScores>)> = Vec::new();
 
-        let negative_rejection = topic.is_negative_label && topic.best_label_score >= 0.85;
+        match request_rx.recv() {
+            Ok(MLRequest::Score { text, response_tx }) => {
+                batch.push((text, response_tx));
+            }
+            Err(_) => break,
+        }
 
-        let _ = response_tx.send(MLScores {
-            classification_score: topic.score,
-            semantic_score,
-            best_label: topic.best_label.clone(),
-            best_label_score: topic.best_label_score,
-            best_reference_idx: best_ref_idx,
-            all_labels: topic.all_labels.clone(),
-            is_negative_label: topic.is_negative_label,
-            negative_rejection,
-            topic,
-            quality,
-        });
+        while batch.len() < ML_BATCH_SIZE {
+            match request_rx.recv_timeout(batch_timeout) {
+                Ok(MLRequest::Score { text, response_tx }) => {
+                    batch.push((text, response_tx));
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => break,
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+
+        if batch.is_empty() {
+            continue;
+        }
+
+        let texts: Vec<&str> = batch.iter().map(|(t, _)| t.as_str()).collect();
+
+        let topics = classify_topic_batch(&classifier, &texts);
+        let qualities = assess_quality_batch(&classifier, &texts);
+        let semantics = semantic_similarity_batch(&embeddings, &reference_embeddings, &texts);
+
+        for (i, (_, response_tx)) in batch.into_iter().enumerate() {
+            let topic = topics.get(i).cloned().unwrap_or_default();
+            let quality = qualities.get(i).cloned().unwrap_or_default();
+            let (semantic_score, best_ref_idx) = semantics.get(i).copied().unwrap_or((0.0, 0));
+
+            let negative_rejection = topic.is_negative_label && topic.best_label_score >= 0.85;
+
+            let _ = response_tx.send(MLScores {
+                classification_score: topic.score,
+                semantic_score,
+                best_label: topic.best_label.clone(),
+                best_label_score: topic.best_label_score,
+                best_reference_idx: best_ref_idx,
+                all_labels: topic.all_labels.clone(),
+                is_negative_label: topic.is_negative_label,
+                negative_rejection,
+                topic,
+                quality,
+            });
+        }
     }
 
     Ok(())
 }
 
-fn classify_topic(classifier: &ZeroShotClassificationModel, text: &str) -> TopicClassification {
+fn classify_topic_batch(
+    classifier: &ZeroShotClassificationModel,
+    texts: &[&str],
+) -> Vec<TopicClassification> {
     let all_labels = TopicLabel::all_labels();
 
     let result = classifier.predict_multilabel(
-        [text],
+        texts,
         &all_labels,
         Some(Box::new(|label| format!("This post is about {}.", label))),
         128,
     );
 
     match result {
-        Ok(predictions) => {
-            if let Some(labels) = predictions.first() {
+        Ok(predictions) => predictions
+            .iter()
+            .map(|labels| {
                 let mut all_scores: Vec<(String, f32)> = labels
                     .iter()
                     .map(|l| (l.text.clone(), l.score as f32))
@@ -238,27 +275,29 @@ fn classify_topic(classifier: &ZeroShotClassificationModel, text: &str) -> Topic
                 } else {
                     TopicClassification::default()
                 }
-            } else {
-                TopicClassification::default()
-            }
-        }
-        Err(_) => TopicClassification::default(),
+            })
+            .collect(),
+        Err(_) => vec![TopicClassification::default(); texts.len()],
     }
 }
 
-fn assess_quality(classifier: &ZeroShotClassificationModel, text: &str) -> QualityAssessment {
+fn assess_quality_batch(
+    classifier: &ZeroShotClassificationModel,
+    texts: &[&str],
+) -> Vec<QualityAssessment> {
     let all_labels = QualityLabel::all_labels();
 
     let result = classifier.predict_multilabel(
-        [text],
+        texts,
         &all_labels,
         Some(Box::new(|label| format!("This tweet sounds {}.", label))),
         128,
     );
 
     match result {
-        Ok(predictions) => {
-            if let Some(labels) = predictions.first() {
+        Ok(predictions) => predictions
+            .iter()
+            .map(|labels| {
                 let scores: std::collections::HashMap<String, f32> = labels
                     .iter()
                     .map(|l| (l.text.clone(), l.score as f32))
@@ -277,11 +316,9 @@ fn assess_quality(classifier: &ZeroShotClassificationModel, text: &str) -> Quali
                     engagement_bait_score,
                     synthetic_score,
                 }
-            } else {
-                QualityAssessment::default()
-            }
-        }
-        Err(_) => QualityAssessment::default(),
+            })
+            .collect(),
+        Err(_) => vec![QualityAssessment::default(); texts.len()],
     }
 }
 

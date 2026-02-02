@@ -7,7 +7,7 @@ mod semantic;
 
 pub use classification::{
     label_multiplier, ClassificationLabel, MLHandle, MLScores, QualityAssessment,
-    TopicClassification, TopicLabel, WEIGHT_CLASSIFICATION,
+    TopicClassification, TopicLabel, ML_BATCH_SIZE, ML_BATCH_TIMEOUT_MS, WEIGHT_CLASSIFICATION,
 };
 pub use content::{
     count_links, detect_first_person, extract_content_signals, is_first_person, ContentSignals,
