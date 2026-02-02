@@ -63,14 +63,7 @@ pub fn log_dimmed(message: &str) {
     println!("  {}", message.dimmed());
 }
 
-pub fn log_startup_config(
-    did: &str,
-    host: &str,
-    port: u16,
-    db: &str,
-    limit: usize,
-    ml_workers: usize,
-) {
+pub fn log_startup_config(did: &str, host: &str, port: u16, db: &str, limit: usize, ml_workers: usize) {
     println!("{}", "Game Dev Progress Feed".green().bold());
     println!("════════════════════════════════════════");
     for (l, v) in [("DID", did), ("Hostname", host), ("Database", db)] {
@@ -128,10 +121,7 @@ pub fn log_cleanup_done(deleted: usize) {
 }
 
 pub fn log_backfill_start() {
-    println!(
-        "{} Searching for recent posts to backfill...",
-        "[BACKFILL]".yellow()
-    );
+    println!("{} Searching for recent posts to backfill...", "[BACKFILL]".yellow());
 }
 pub fn log_backfill_done(count: usize) {
     if count > 0 {

@@ -84,7 +84,11 @@ pub async fn run_backfill(pool: DbPool, ml_handle: MLHandle) -> anyhow::Result<u
         .unwrap_or_else(Utc::now)
         .to_rfc3339();
 
-    tracing::info!("Backfill: Searching for posts from {} to {}", since, until);
+    tracing::info!(
+        "Backfill: Searching for posts from {} to {}",
+        since,
+        until
+    );
 
     let client = reqwest::Client::new();
     let access_token = create_session(&client).await?;
