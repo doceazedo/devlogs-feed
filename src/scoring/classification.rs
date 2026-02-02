@@ -10,7 +10,6 @@ use super::semantic::{compute_reference_embeddings, semantic_similarity};
 use crate::utils::{log_ml_error, log_ml_model_loaded, log_ml_ready, log_ml_step};
 
 pub const WEIGHT_CLASSIFICATION: f32 = 0.50;
-pub const NEGATIVE_REJECTION_THRESHOLD: f32 = 0.70;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Display, EnumIter, IntoStaticStr)]
 pub enum ClassificationLabel {
@@ -226,16 +225,13 @@ fn classify(classifier: &ZeroShotClassificationModel, text: &str) -> Classificat
                         1.0 - best_score
                     };
 
-                    let negative_rejection =
-                        is_negative && *best_score >= NEGATIVE_REJECTION_THRESHOLD;
-
                     ClassificationResult {
                         score,
                         best_label: best_label.clone(),
                         best_label_score: *best_score,
                         all_labels: all_scores,
                         is_negative_label: is_negative,
-                        negative_rejection,
+                        negative_rejection: is_negative,
                     }
                 } else {
                     ClassificationResult::default()
