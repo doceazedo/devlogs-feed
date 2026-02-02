@@ -4,63 +4,43 @@ use crate::scoring::{
     has_keywords, label_multiplier, passes_threshold, FilterResult, MLHandle, MediaInfo,
     PrioritySignals,
 };
+use crate::utils::bluesky::{create_session, search_posts, SearchPost};
 use crate::utils::logs::{self, PostAssessment};
 use chrono::Utc;
-use serde::Deserialize;
 
 pub const BACKFILL_LIMIT: usize = 100;
 pub const BACKFILL_HOURS: i64 = 96;
-
-#[derive(Debug, Deserialize)]
-struct SearchResponse {
-    posts: Vec<SearchPost>,
-    #[allow(dead_code)]
-    cursor: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct SearchPost {
-    uri: String,
-    author: SearchAuthor,
-    record: SearchRecord,
-    #[serde(rename = "indexedAt")]
-    indexed_at: String,
-    embed: Option<serde_json::Value>,
-}
-
-#[derive(Debug, Deserialize)]
-struct SearchAuthor {
-    did: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct SearchRecord {
-    text: String,
-    langs: Option<Vec<String>>,
-}
+const SEARCH_LIMIT: u32 = 50;
 
 pub async fn run_backfill(pool: DbPool, ml_handle: &MLHandle) {
     logs::log_backfill_start();
 
-    let search_queries = vec![
-        "#gamedev",
-        "#indiedev",
-        "#devlog",
-        "#screenshotsaturday",
-        "gamedev progress",
-        "devlog update",
-    ];
-
-    let mut all_posts: Vec<SearchPost> = Vec::new();
     let client = reqwest::Client::new();
 
+    let access_token = match create_session(&client).await {
+        Ok(token) => token,
+        Err(e) => {
+            logs::log_backfill_auth_failed(&e);
+            return;
+        }
+    };
+
+    let search_queries = vec!["gamedev", "indiedev", "devlog", "game development"];
+
+    let mut all_posts: Vec<SearchPost> = Vec::new();
+
     for query in &search_queries {
-        if let Ok(posts) = fetch_search_results(&client, query).await {
-            logs::log_backfill_query(query, posts.len());
-            all_posts.extend(posts);
+        match search_posts(&client, &access_token, query, SEARCH_LIMIT).await {
+            Ok(posts) => {
+                logs::log_backfill_query(query, posts.len());
+                all_posts.extend(posts);
+            }
+            Err(e) => {
+                logs::log_backfill_query_failed(query, &e);
+            }
         }
 
-        if all_posts.len() >= BACKFILL_LIMIT * 2 {
+        if all_posts.len() >= BACKFILL_LIMIT {
             break;
         }
     }
@@ -76,11 +56,20 @@ pub async fn run_backfill(pool: DbPool, ml_handle: &MLHandle) {
     };
 
     let cutoff = Utc::now().timestamp() - (BACKFILL_HOURS * 3600);
+    let total_to_process = all_posts.len().min(BACKFILL_LIMIT);
     let mut new_posts: Vec<NewPost> = Vec::new();
+    let mut current = 0;
     let mut processed = 0;
+    let mut duplicates = 0;
+    let mut too_old = 0;
+    let mut filtered = 0;
+    let mut no_relevance = 0;
+    let mut ml_rejected = 0;
+    let mut below_threshold = 0;
 
-    for post in all_posts.iter().take(BACKFILL_LIMIT * 2) {
+    for post in all_posts.iter().take(BACKFILL_LIMIT) {
         if db::post_exists(&mut conn, &post.uri) {
+            duplicates += 1;
             continue;
         }
 
@@ -89,6 +78,7 @@ pub async fn run_backfill(pool: DbPool, ml_handle: &MLHandle) {
             .unwrap_or_else(|_| Utc::now().timestamp());
 
         if timestamp < cutoff {
+            too_old += 1;
             continue;
         }
 
@@ -107,6 +97,7 @@ pub async fn run_backfill(pool: DbPool, ml_handle: &MLHandle) {
         let filter_result = apply_filters(text, lang, Some(&post.author.did), |_| false);
         assessment.set_filter_result(filter_result.clone());
         if matches!(filter_result, FilterResult::Reject(_)) {
+            filtered += 1;
             continue;
         }
 
@@ -114,6 +105,7 @@ pub async fn run_backfill(pool: DbPool, ml_handle: &MLHandle) {
         let (found_hashtags, _) = has_hashtags(text);
         assessment.set_relevance(found_keywords, found_hashtags);
         if !found_keywords && !found_hashtags {
+            no_relevance += 1;
             continue;
         }
 
@@ -126,6 +118,7 @@ pub async fn run_backfill(pool: DbPool, ml_handle: &MLHandle) {
             ml_scores.is_negative_label,
         );
         if matches!(ml_filter_result, FilterResult::Reject(_)) {
+            ml_rejected += 1;
             continue;
         }
 
@@ -155,6 +148,8 @@ pub async fn run_backfill(pool: DbPool, ml_handle: &MLHandle) {
         let passed = passes_threshold(&breakdown);
         assessment.set_threshold_result(passed, breakdown.final_priority);
         assessment.print();
+        current += 1;
+        logs::log_backfill_progress(current, total_to_process);
 
         if passed {
             let new_post = NewPost {
@@ -187,43 +182,25 @@ pub async fn run_backfill(pool: DbPool, ml_handle: &MLHandle) {
             if new_posts.len() >= BACKFILL_LIMIT {
                 break;
             }
+        } else {
+            below_threshold += 1;
         }
     }
 
     let accepted = new_posts.len();
+    logs::log_backfill_stats(
+        duplicates,
+        too_old,
+        filtered,
+        no_relevance,
+        ml_rejected,
+        below_threshold,
+    );
     if !new_posts.is_empty() {
         let _ = db::insert_posts(&mut conn, new_posts);
     }
 
     logs::log_backfill_complete(accepted, processed);
-}
-
-async fn fetch_search_results(
-    client: &reqwest::Client,
-    query: &str,
-) -> Result<Vec<SearchPost>, String> {
-    let url = format!(
-        "https://public.api.bsky.app/xrpc/app.bsky.feed.searchPosts?q={}&limit=50",
-        urlencoding::encode(query)
-    );
-
-    let response = client
-        .get(&url)
-        .header("Accept", "application/json")
-        .send()
-        .await
-        .map_err(|e| format!("Request failed: {}", e))?;
-
-    if !response.status().is_success() {
-        return Err(format!("API error: {}", response.status()));
-    }
-
-    let search_response: SearchResponse = response
-        .json()
-        .await
-        .map_err(|e| format!("Parse failed: {}", e))?;
-
-    Ok(search_response.posts)
 }
 
 fn extract_media_from_embed(embed: &Option<serde_json::Value>) -> MediaInfo {

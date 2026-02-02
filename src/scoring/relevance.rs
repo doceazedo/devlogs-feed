@@ -11,6 +11,11 @@ pub fn strip_hashtags(text: &str) -> String {
 pub const GAMEDEV_KEYWORDS: &[&str] = &[
     "gamedev",
     "game dev",
+    "game development",
+    "game animation",
+    "game art",
+    "game audio",
+    "game design",
     "indiedev",
     "indie dev",
     "devlog",

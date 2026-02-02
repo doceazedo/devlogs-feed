@@ -50,7 +50,6 @@ async fn main() -> Result<()> {
     logs::log_ml_ready();
 
     if enable_backfill {
-        tokio::time::sleep(Duration::from_secs(10)).await;
         backfill::run_backfill(pool.clone(), &ml_handle).await;
     }
 

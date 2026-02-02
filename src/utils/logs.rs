@@ -60,6 +60,18 @@ fn bold() -> Style {
     Style::new().bold()
 }
 
+fn init_prefix() -> String {
+    blue().apply_to("[INIT]").to_string()
+}
+
+fn backfill_prefix() -> String {
+    magenta().apply_to("[BACKFILL]").to_string()
+}
+
+fn ml_prefix() -> String {
+    yellow().apply_to("[ML]").to_string()
+}
+
 fn pad_label(label: &str, depth: usize) -> String {
     let prefix_width = depth * TREE_PREFIX_WIDTH;
     let target_width = VALUE_COLUMN.saturating_sub(prefix_width);
@@ -78,28 +90,27 @@ fn format_signed(value: f32) -> String {
 
 pub fn log_init(hostname: &str, port: u16, backfill_enabled: bool) {
     println!(
-        "{} devlogs feed on {}:{}",
-        green().apply_to("starting"),
-        cyan().apply_to(hostname),
-        cyan().apply_to(port)
+        "{} starting devlogs-feed on {}...",
+        init_prefix(),
+        cyan().apply_to(format!("{hostname}:{port}")),
     );
     println!(
-        "{}backfill: {}",
-        tree_end(),
+        "{} backfill is {}.",
+        init_prefix(),
         if backfill_enabled {
             green().apply_to("enabled")
         } else {
-            dim().apply_to("disabled")
+            yellow().apply_to("disabled")
         }
     );
 }
 
 pub fn log_ml_loading() {
-    println!("{} ml models...", blue().apply_to("loading"));
+    println!("{} loading models...", ml_prefix());
 }
 
 pub fn log_ml_ready() {
-    println!("{} ml models ready", green().apply_to("loaded"));
+    println!("{} models ready!", ml_prefix());
 }
 
 pub fn log_feed_served(count: usize, cursor: Option<&String>) {
@@ -124,23 +135,103 @@ pub struct BackfillProgress {
 }
 
 pub fn log_backfill_start() {
-    println!("{} backfill...", blue().apply_to("loading"));
+    println!("{} starting backfill...", backfill_prefix());
+}
+
+pub fn log_backfill_auth_failed(error: &str) {
+    println!(
+        "{} {} {}",
+        backfill_prefix(),
+        red().apply_to("failed auth:"),
+        dim().apply_to(error)
+    );
 }
 
 pub fn log_backfill_query(query: &str, fetched: usize) {
     println!(
-        "{}searching {}: {} posts",
+        "{} fetched {} {} posts",
+        backfill_prefix(),
+        bold().apply_to(fetched),
+        cyan().apply_to(query),
+    );
+}
+
+pub fn log_backfill_query_failed(query: &str, error: &str) {
+    println!(
+        "{}searching {}: {}",
         tree_branch(),
         cyan().apply_to(query),
-        bold().apply_to(fetched)
+        red().apply_to(error)
+    );
+}
+
+pub fn log_backfill_stats(
+    duplicates: usize,
+    too_old: usize,
+    filtered: usize,
+    no_relevance: usize,
+    ml_rejected: usize,
+    below_threshold: usize,
+) {
+    println!("{} done.", backfill_prefix());
+    println!("{}skipped:", tree_branch());
+    println!(
+        "{}{}{} {}",
+        tree_indent(),
+        tree_branch(),
+        pad_label("duplicates", 2),
+        dim().apply_to(duplicates)
+    );
+    println!(
+        "{}{}{} {}",
+        tree_indent(),
+        tree_branch(),
+        pad_label("too old", 2),
+        dim().apply_to(too_old)
+    );
+    println!(
+        "{}{}{} {}",
+        tree_indent(),
+        tree_branch(),
+        pad_label("filtered", 2),
+        dim().apply_to(filtered)
+    );
+    println!(
+        "{}{}{} {}",
+        tree_indent(),
+        tree_branch(),
+        pad_label("no relevance", 2),
+        dim().apply_to(no_relevance)
+    );
+    println!(
+        "{}{}{} {}",
+        tree_indent(),
+        tree_branch(),
+        pad_label("ml rejected", 2),
+        dim().apply_to(ml_rejected)
+    );
+    println!(
+        "{}{}{} {}",
+        tree_indent(),
+        tree_end(),
+        pad_label("below threshold", 2),
+        dim().apply_to(below_threshold)
+    );
+}
+
+pub fn log_backfill_progress(current: usize, total: usize) {
+    println!(
+        "{} progress: {}{}",
+        backfill_prefix(),
+        bold().apply_to(current),
+        dim().apply_to(format!("/{total}"))
     );
 }
 
 pub fn log_backfill_complete(total_accepted: usize, total_processed: usize) {
     println!(
-        "{}{} backfill: {}/{} posts accepted",
-        tree_end(),
-        green().apply_to("completed"),
+        "{} {}/{} posts accepted",
+        backfill_prefix(),
         bold().apply_to(total_accepted),
         dim().apply_to(total_processed)
     );
@@ -171,8 +262,8 @@ pub struct PostAssessment {
 
 impl PostAssessment {
     pub fn new(text: &str) -> Self {
-        let preview = if text.len() > 60 {
-            format!("{}...", &text[..57])
+        let preview = if text.chars().count() > 60 {
+            format!("{}...", text.chars().take(57).collect::<String>())
         } else {
             text.to_string()
         };
@@ -231,7 +322,7 @@ impl PostAssessment {
 
         lines.push(format!(
             "{} \"{}\"",
-            magenta().apply_to(bold().apply_to("post assessment")),
+            magenta().apply_to(bold().apply_to("[POST ASSESSMENT]")),
             dim().apply_to(&self.text_preview)
         ));
 
@@ -592,7 +683,7 @@ impl PostAssessment {
             ));
         }
 
-        println!("{}", lines.join("\n"));
+        println!("{}\n", lines.join("\n"));
     }
 }
 

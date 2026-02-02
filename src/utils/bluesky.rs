@@ -1,5 +1,8 @@
 use regex::Regex;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+
+pub const PUBLIC_API_BASE: &str = "https://public.api.bsky.app/xrpc";
+pub const AUTH_API_BASE: &str = "https://bsky.social/xrpc";
 
 #[derive(Debug, Deserialize)]
 struct PostThreadResponse {
@@ -51,7 +54,8 @@ pub fn parse_bluesky_url(input: &str) -> Option<String> {
 
 pub async fn fetch_post(at_uri: &str) -> Result<FetchedPost, String> {
     let url = format!(
-        "https://public.api.bsky.app/xrpc/app.bsky.feed.getPostThread?uri={}&depth=0",
+        "{}/app.bsky.feed.getPostThread?uri={}&depth=0",
+        PUBLIC_API_BASE,
         urlencoding::encode(at_uri)
     );
 
@@ -121,4 +125,105 @@ fn extract_media_info(embed: &Option<serde_json::Value>) -> (bool, bool, usize) 
         }
         _ => (false, false, 0),
     }
+}
+
+#[derive(Debug, Serialize)]
+struct CreateSessionRequest {
+    identifier: String,
+    password: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateSessionResponse {
+    #[serde(rename = "accessJwt")]
+    access_jwt: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct SearchResponse {
+    posts: Vec<SearchPost>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SearchPost {
+    pub uri: String,
+    pub author: SearchAuthor,
+    pub record: SearchRecord,
+    #[serde(rename = "indexedAt")]
+    pub indexed_at: String,
+    pub embed: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SearchAuthor {
+    pub did: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SearchRecord {
+    pub text: String,
+    pub langs: Option<Vec<String>>,
+}
+
+pub async fn create_session(client: &reqwest::Client) -> Result<String, String> {
+    let identifier = std::env::var("BLUESKY_IDENTIFIER")
+        .map_err(|_| "BLUESKY_IDENTIFIER not set".to_string())?;
+    let password =
+        std::env::var("BLUESKY_PASSWORD").map_err(|_| "BLUESKY_PASSWORD not set".to_string())?;
+
+    let url = format!("{}/com.atproto.server.createSession", AUTH_API_BASE);
+
+    let response = client
+        .post(&url)
+        .json(&CreateSessionRequest {
+            identifier,
+            password,
+        })
+        .send()
+        .await
+        .map_err(|e| format!("Auth request failed: {}", e))?;
+
+    if !response.status().is_success() {
+        return Err(format!("Auth failed: {}", response.status()));
+    }
+
+    let session: CreateSessionResponse = response
+        .json()
+        .await
+        .map_err(|e| format!("Auth parse failed: {}", e))?;
+
+    Ok(session.access_jwt)
+}
+
+pub async fn search_posts(
+    client: &reqwest::Client,
+    access_token: &str,
+    query: &str,
+    limit: u32,
+) -> Result<Vec<SearchPost>, String> {
+    let url = format!(
+        "{}/app.bsky.feed.searchPosts?q={}&limit={}",
+        AUTH_API_BASE,
+        urlencoding::encode(query),
+        limit
+    );
+
+    let response = client
+        .get(&url)
+        .header("Accept", "application/json")
+        .header("Authorization", format!("Bearer {}", access_token))
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    if !response.status().is_success() {
+        return Err(format!("API error: {}", response.status()));
+    }
+
+    let search_response: SearchResponse = response
+        .json()
+        .await
+        .map_err(|e| format!("Parse failed: {}", e))?;
+
+    Ok(search_response.posts)
 }
