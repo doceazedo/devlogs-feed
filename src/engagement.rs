@@ -1,0 +1,362 @@
+use crate::db::DbPool;
+use crate::schema::{engagement_cache, replies, reposts, spammers};
+use chrono::Utc;
+use diesel::prelude::*;
+use diesel::result::Error as DieselError;
+
+const SPAM_REPOST_THRESHOLD: f32 = 10.0;
+const VELOCITY_WINDOW_HOURS: i64 = 6;
+
+pub const REPLY_WEIGHT: f32 = 3.0;
+pub const REPOST_WEIGHT: f32 = 2.0;
+pub const LIKE_WEIGHT: f32 = 1.0;
+
+#[derive(Debug)]
+#[allow(dead_code)]
+pub struct SpamDetected {
+    pub did: String,
+    pub reason: String,
+    pub repost_frequency: Option<f32>,
+}
+
+#[derive(Insertable, Debug)]
+#[diesel(table_name = reposts)]
+pub struct NewRepost {
+    pub post_uri: String,
+    pub repost_uri: String,
+    pub reposter_did: String,
+    pub timestamp: i64,
+}
+
+#[derive(Insertable, Debug)]
+#[diesel(table_name = replies)]
+pub struct NewReply {
+    pub post_uri: String,
+    pub reply_uri: String,
+    pub author_did: String,
+    pub timestamp: i64,
+}
+
+#[derive(Insertable, Debug)]
+#[diesel(table_name = spammers)]
+pub struct NewSpammer {
+    pub did: String,
+    pub reason: String,
+    pub repost_frequency: Option<f32>,
+    pub flagged_at: i64,
+    pub auto_detected: i32,
+}
+
+#[derive(Queryable, Selectable, Debug)]
+#[diesel(table_name = spammers)]
+#[allow(dead_code)]
+pub struct Spammer {
+    pub did: String,
+    pub reason: String,
+    pub repost_frequency: Option<f32>,
+    pub flagged_at: i64,
+    pub auto_detected: i32,
+}
+
+#[derive(Insertable, AsChangeset, Debug)]
+#[diesel(table_name = engagement_cache)]
+pub struct EngagementCacheEntry {
+    pub post_uri: String,
+    pub reply_count: i32,
+    pub repost_count: i32,
+    pub like_count: i32,
+    pub velocity_score: f32,
+    pub last_updated: i64,
+}
+
+#[derive(Queryable, Selectable, Debug)]
+#[diesel(table_name = engagement_cache)]
+#[allow(dead_code)]
+pub struct EngagementCache {
+    pub post_uri: String,
+    pub reply_count: i32,
+    pub repost_count: i32,
+    pub like_count: i32,
+    pub velocity_score: f32,
+    pub last_updated: i64,
+}
+
+#[derive(Clone)]
+pub struct EngagementTracker {
+    pool: DbPool,
+}
+
+impl EngagementTracker {
+    pub fn new(pool: DbPool) -> Self {
+        Self { pool }
+    }
+
+    #[allow(dead_code)]
+    pub fn record_reply(
+        &self,
+        post_uri: &str,
+        reply_uri: &str,
+        reply_author: &str,
+        post_author: &str,
+    ) -> Result<(), DieselError> {
+        if reply_author == post_author {
+            return Ok(());
+        }
+
+        let mut conn = self
+            .pool
+            .get()
+            .map_err(|_| DieselError::BrokenTransactionManager)?;
+
+        let new_reply = NewReply {
+            post_uri: post_uri.to_string(),
+            reply_uri: reply_uri.to_string(),
+            author_did: reply_author.to_string(),
+            timestamp: Utc::now().timestamp(),
+        };
+
+        diesel::insert_or_ignore_into(replies::table)
+            .values(&new_reply)
+            .execute(&mut conn)?;
+
+        self.update_engagement_cache(&mut conn, post_uri)?;
+
+        Ok(())
+    }
+
+    #[allow(dead_code)]
+    pub fn record_repost(
+        &self,
+        post_uri: &str,
+        repost_uri: &str,
+        reposter_did: &str,
+    ) -> Result<(), SpamDetected> {
+        let mut conn = self.pool.get().map_err(|_| SpamDetected {
+            did: reposter_did.to_string(),
+            reason: "database error".to_string(),
+            repost_frequency: None,
+        })?;
+
+        if let Some(spam) = self.check_spam_behavior(&mut conn, reposter_did) {
+            self.flag_spammer_internal(
+                &mut conn,
+                reposter_did,
+                &spam.reason,
+                spam.repost_frequency,
+            )
+            .ok();
+            return Err(spam);
+        }
+
+        let new_repost = NewRepost {
+            post_uri: post_uri.to_string(),
+            repost_uri: repost_uri.to_string(),
+            reposter_did: reposter_did.to_string(),
+            timestamp: Utc::now().timestamp(),
+        };
+
+        diesel::insert_or_ignore_into(reposts::table)
+            .values(&new_repost)
+            .execute(&mut conn)
+            .ok();
+
+        self.update_engagement_cache(&mut conn, post_uri).ok();
+
+        Ok(())
+    }
+
+    pub fn record_like(&self, post_uri: &str) -> Result<(), DieselError> {
+        let mut conn = self
+            .pool
+            .get()
+            .map_err(|_| DieselError::BrokenTransactionManager)?;
+        self.update_engagement_cache(&mut conn, post_uri)
+    }
+
+    fn check_spam_behavior(
+        &self,
+        conn: &mut diesel::SqliteConnection,
+        reposter_did: &str,
+    ) -> Option<SpamDetected> {
+        let now = Utc::now().timestamp();
+        let window_start = now - (VELOCITY_WINDOW_HOURS * 3600);
+
+        let recent_count: i64 = reposts::table
+            .filter(reposts::reposter_did.eq(reposter_did))
+            .filter(reposts::timestamp.gt(window_start))
+            .count()
+            .get_result(conn)
+            .unwrap_or(0);
+
+        let frequency = recent_count as f32 / VELOCITY_WINDOW_HOURS as f32;
+
+        if frequency >= SPAM_REPOST_THRESHOLD {
+            return Some(SpamDetected {
+                did: reposter_did.to_string(),
+                reason: format!("high repost frequency: {:.1}/hr", frequency),
+                repost_frequency: Some(frequency),
+            });
+        }
+
+        None
+    }
+
+    fn update_engagement_cache(
+        &self,
+        conn: &mut diesel::SqliteConnection,
+        post_uri: &str,
+    ) -> Result<(), DieselError> {
+        let now = Utc::now().timestamp();
+        let window_start = now - (VELOCITY_WINDOW_HOURS * 3600);
+
+        let reply_count: i64 = replies::table
+            .filter(replies::post_uri.eq(post_uri))
+            .count()
+            .get_result(conn)
+            .unwrap_or(0);
+
+        let recent_replies: i64 = replies::table
+            .filter(replies::post_uri.eq(post_uri))
+            .filter(replies::timestamp.gt(window_start))
+            .count()
+            .get_result(conn)
+            .unwrap_or(0);
+
+        let repost_count: i64 = reposts::table
+            .filter(reposts::post_uri.eq(post_uri))
+            .count()
+            .get_result(conn)
+            .unwrap_or(0);
+
+        let recent_reposts: i64 = reposts::table
+            .filter(reposts::post_uri.eq(post_uri))
+            .filter(reposts::timestamp.gt(window_start))
+            .count()
+            .get_result(conn)
+            .unwrap_or(0);
+
+        let like_count: i64 = crate::schema::likes::table
+            .filter(crate::schema::likes::post_uri.eq(post_uri))
+            .count()
+            .get_result(conn)
+            .unwrap_or(0);
+
+        let velocity = recent_replies as f32 * REPLY_WEIGHT
+            + recent_reposts as f32 * REPOST_WEIGHT
+            + like_count as f32 * LIKE_WEIGHT * 0.1;
+
+        let entry = EngagementCacheEntry {
+            post_uri: post_uri.to_string(),
+            reply_count: reply_count as i32,
+            repost_count: repost_count as i32,
+            like_count: like_count as i32,
+            velocity_score: velocity,
+            last_updated: now,
+        };
+
+        diesel::insert_into(engagement_cache::table)
+            .values(&entry)
+            .on_conflict(engagement_cache::post_uri)
+            .do_update()
+            .set(&entry)
+            .execute(conn)?;
+
+        Ok(())
+    }
+
+    pub fn get_velocity(&self, post_uri: &str) -> f32 {
+        let mut conn = match self.pool.get() {
+            Ok(c) => c,
+            Err(_) => return 0.0,
+        };
+
+        engagement_cache::table
+            .filter(engagement_cache::post_uri.eq(post_uri))
+            .select(engagement_cache::velocity_score)
+            .first(&mut conn)
+            .unwrap_or(0.0)
+    }
+
+    #[allow(dead_code)]
+    pub fn get_engagement(&self, post_uri: &str) -> Option<EngagementCache> {
+        let mut conn = self.pool.get().ok()?;
+
+        engagement_cache::table
+            .filter(engagement_cache::post_uri.eq(post_uri))
+            .first(&mut conn)
+            .ok()
+    }
+
+    pub fn is_spammer(&self, did: &str) -> bool {
+        let mut conn = match self.pool.get() {
+            Ok(c) => c,
+            Err(_) => return false,
+        };
+
+        spammers::table
+            .filter(spammers::did.eq(did))
+            .count()
+            .get_result::<i64>(&mut conn)
+            .unwrap_or(0)
+            > 0
+    }
+
+    #[allow(dead_code)]
+    pub fn flag_spammer(&self, did: &str, reason: &str) -> Result<(), DieselError> {
+        let mut conn = self
+            .pool
+            .get()
+            .map_err(|_| DieselError::BrokenTransactionManager)?;
+        self.flag_spammer_internal(&mut conn, did, reason, None)
+    }
+
+    fn flag_spammer_internal(
+        &self,
+        conn: &mut diesel::SqliteConnection,
+        did: &str,
+        reason: &str,
+        frequency: Option<f32>,
+    ) -> Result<(), DieselError> {
+        let new_spammer = NewSpammer {
+            did: did.to_string(),
+            reason: reason.to_string(),
+            repost_frequency: frequency,
+            flagged_at: Utc::now().timestamp(),
+            auto_detected: if frequency.is_some() { 1 } else { 0 },
+        };
+
+        diesel::insert_or_ignore_into(spammers::table)
+            .values(&new_spammer)
+            .execute(conn)?;
+
+        Ok(())
+    }
+
+    pub fn cleanup_old_engagement(&self, cutoff_timestamp: i64) -> Result<usize, DieselError> {
+        let mut conn = self
+            .pool
+            .get()
+            .map_err(|_| DieselError::BrokenTransactionManager)?;
+
+        let deleted_replies =
+            diesel::delete(replies::table.filter(replies::timestamp.lt(cutoff_timestamp)))
+                .execute(&mut conn)?;
+
+        let deleted_reposts =
+            diesel::delete(reposts::table.filter(reposts::timestamp.lt(cutoff_timestamp)))
+                .execute(&mut conn)?;
+
+        Ok(deleted_replies + deleted_reposts)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_velocity_calculation() {
+        let velocity = 5.0 * REPLY_WEIGHT + 3.0 * REPOST_WEIGHT + 10.0 * LIKE_WEIGHT * 0.1;
+        assert!((velocity - 22.0).abs() < 0.01);
+    }
+}

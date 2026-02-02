@@ -1,4 +1,6 @@
+mod backfill;
 mod db;
+mod engagement;
 mod handler;
 mod schema;
 pub mod scoring;
@@ -47,6 +49,9 @@ async fn main() -> Result<()> {
         .and_then(|l| l.parse().ok())
         .unwrap_or(5000);
     let database_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| "feed.db".to_string());
+    let enable_backfill = std::env::var("ENABLE_BACKFILL")
+        .map(|v| v == "1" || v.to_lowercase() == "true")
+        .unwrap_or(false);
 
     log_startup_config(
         &publisher_did,
@@ -68,6 +73,11 @@ async fn main() -> Result<()> {
     utils::log_ml_loading("Spawning ML worker thread...");
     utils::log_ml_loading("Models will load in background (this may take a while on first run)");
     let ml_handle = MLHandle::spawn()?;
+
+    if enable_backfill {
+        tokio::time::sleep(Duration::from_secs(10)).await;
+        backfill::run_backfill(pool.clone(), &ml_handle).await;
+    }
 
     let handler = Arc::new(Mutex::new(GameDevFeedHandler::new(pool, ml_handle)));
 

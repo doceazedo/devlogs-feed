@@ -7,8 +7,6 @@ use std::time::Instant;
 
 use crate::utils::{log_ml_model_loaded, log_ml_step, log_ml_step_done};
 
-pub const WEIGHT_SEMANTIC: f32 = 0.20;
-
 pub const REFERENCE_POSTS: &[&str] = &[
     "Just implemented the new combat system, feels so satisfying!",
     "Week 12 devlog: added procedural terrain generation",

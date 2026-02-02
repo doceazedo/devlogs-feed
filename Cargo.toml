@@ -31,3 +31,4 @@ tokio = { version = "1.49.0", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 urlencoding = "2"
+rand = "0.9"

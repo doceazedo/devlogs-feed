@@ -12,14 +12,11 @@ use crate::utils::{log_ml_error, log_ml_model_loaded, log_ml_ready, log_ml_step}
 pub const WEIGHT_CLASSIFICATION: f32 = 0.50;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Display, EnumIter, IntoStaticStr)]
-pub enum ClassificationLabel {
-    // good :)
+pub enum TopicLabel {
     #[strum(to_string = "game developer sharing their own work")]
     GameDevSharingWork,
     #[strum(to_string = "game programming or technical development")]
     GameProgramming,
-
-    // bad :(
     #[strum(to_string = "gamer discussing games they play")]
     GamerDiscussing,
     #[strum(to_string = "game review or gameplay opinion")]
@@ -31,12 +28,12 @@ pub enum ClassificationLabel {
     #[strum(to_string = "AI generated")]
     GenAi,
     #[strum(to_string = "crypto or NFT related")]
-    CryptoAndNFTs,
+    CryptoNFT,
     #[strum(to_string = "unrelated")]
     Unrelated,
 }
 
-impl ClassificationLabel {
+impl TopicLabel {
     pub fn is_positive(&self) -> bool {
         self.multiplier() >= 1.0
     }
@@ -50,7 +47,7 @@ impl ClassificationLabel {
             Self::Marketing => 0.2,
             Self::JobPosting => 0.2,
             Self::GenAi => 0.0,
-            Self::CryptoAndNFTs => 0.0,
+            Self::CryptoNFT => 0.0,
             Self::Unrelated => 0.2,
         }
     }
@@ -74,7 +71,7 @@ impl ClassificationLabel {
     }
 }
 
-impl FromStr for ClassificationLabel {
+impl FromStr for TopicLabel {
     type Err = ();
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -83,9 +80,40 @@ impl FromStr for ClassificationLabel {
 }
 
 pub fn label_multiplier(label: &str) -> f32 {
-    ClassificationLabel::from_str(label)
+    TopicLabel::from_str(label)
         .map(|l| l.multiplier())
         .unwrap_or(0.6)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Display, EnumIter, IntoStaticStr)]
+pub enum QualityLabel {
+    #[strum(to_string = "casual and personal")]
+    Authentic,
+    #[strum(to_string = "engagement bait or a call to action")]
+    EngagementBait,
+    #[strum(to_string = "templated")]
+    Synthetic,
+}
+
+impl QualityLabel {
+    pub fn all_labels() -> Vec<&'static str> {
+        Self::iter().map(|l| l.into()).collect()
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct TopicClassification {
+    pub score: f32,
+    pub best_label: String,
+    pub best_label_score: f32,
+    pub all_labels: Vec<(String, f32)>,
+    pub is_negative_label: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct QualityAssessment {
+    pub engagement_bait_score: f32,
+    pub synthetic_score: f32,
 }
 
 pub enum MLRequest {
@@ -97,11 +125,14 @@ pub enum MLRequest {
 
 #[derive(Debug, Clone, Default)]
 pub struct MLScores {
-    pub classification_score: f32,
+    pub topic: TopicClassification,
+    pub quality: QualityAssessment,
     pub semantic_score: f32,
+    pub best_reference_idx: usize,
+
+    pub classification_score: f32,
     pub best_label: String,
     pub best_label_score: f32,
-    pub best_reference_idx: usize,
     pub all_labels: Vec<(String, f32)>,
     pub is_negative_label: bool,
     pub negative_rejection: bool,
@@ -153,49 +184,32 @@ fn run_ml_worker(request_rx: mpsc::Receiver<MLRequest>) -> Result<()> {
 
     for request in request_rx {
         let MLRequest::Score { text, response_tx } = request;
-        let classification = classify(&classifier, &text);
+        let topic = classify_topic(&classifier, &text);
+        let quality = assess_quality(&classifier, &text);
         let (semantic_score, best_ref_idx) =
             semantic_similarity(&embeddings, &reference_embeddings, &text);
 
+        let negative_rejection = topic.is_negative_label && topic.best_label_score >= 0.85;
+
         let _ = response_tx.send(MLScores {
-            classification_score: classification.score,
+            classification_score: topic.score,
             semantic_score,
-            best_label: classification.best_label,
-            best_label_score: classification.best_label_score,
+            best_label: topic.best_label.clone(),
+            best_label_score: topic.best_label_score,
             best_reference_idx: best_ref_idx,
-            all_labels: classification.all_labels,
-            is_negative_label: classification.is_negative_label,
-            negative_rejection: classification.negative_rejection,
+            all_labels: topic.all_labels.clone(),
+            is_negative_label: topic.is_negative_label,
+            negative_rejection,
+            topic,
+            quality,
         });
     }
 
     Ok(())
 }
 
-pub struct ClassificationResult {
-    pub score: f32,
-    pub best_label: String,
-    pub best_label_score: f32,
-    pub all_labels: Vec<(String, f32)>,
-    pub is_negative_label: bool,
-    pub negative_rejection: bool,
-}
-
-impl Default for ClassificationResult {
-    fn default() -> Self {
-        Self {
-            score: 0.0,
-            best_label: String::new(),
-            best_label_score: 0.0,
-            all_labels: Vec::new(),
-            is_negative_label: false,
-            negative_rejection: false,
-        }
-    }
-}
-
-fn classify(classifier: &ZeroShotClassificationModel, text: &str) -> ClassificationResult {
-    let all_labels = ClassificationLabel::all_labels();
+fn classify_topic(classifier: &ZeroShotClassificationModel, text: &str) -> TopicClassification {
+    let all_labels = TopicLabel::all_labels();
 
     let result = classifier.predict_multilabel(
         [text],
@@ -214,7 +228,7 @@ fn classify(classifier: &ZeroShotClassificationModel, text: &str) -> Classificat
                 all_scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
 
                 if let Some((best_label, best_score)) = all_scores.first() {
-                    let is_positive = ClassificationLabel::from_str(best_label)
+                    let is_positive = TopicLabel::from_str(best_label)
                         .map(|l| l.is_positive())
                         .unwrap_or(false);
                     let is_negative = !is_positive;
@@ -225,21 +239,61 @@ fn classify(classifier: &ZeroShotClassificationModel, text: &str) -> Classificat
                         1.0 - best_score
                     };
 
-                    ClassificationResult {
+                    TopicClassification {
                         score,
                         best_label: best_label.clone(),
                         best_label_score: *best_score,
                         all_labels: all_scores,
                         is_negative_label: is_negative,
-                        negative_rejection: is_negative,
                     }
                 } else {
-                    ClassificationResult::default()
+                    TopicClassification::default()
                 }
             } else {
-                ClassificationResult::default()
+                TopicClassification::default()
             }
         }
-        Err(_) => ClassificationResult::default(),
+        Err(_) => TopicClassification::default(),
     }
 }
+
+fn assess_quality(classifier: &ZeroShotClassificationModel, text: &str) -> QualityAssessment {
+    let all_labels = QualityLabel::all_labels();
+
+    let result = classifier.predict_multilabel(
+        [text],
+        &all_labels,
+        Some(Box::new(|label| format!("This tweet sounds {}.", label))),
+        128,
+    );
+
+    match result {
+        Ok(predictions) => {
+            if let Some(labels) = predictions.first() {
+                let scores: std::collections::HashMap<String, f32> = labels
+                    .iter()
+                    .map(|l| (l.text.clone(), l.score as f32))
+                    .collect();
+
+                let engagement_bait_score = scores
+                    .get(QualityLabel::EngagementBait.to_string().as_str())
+                    .copied()
+                    .unwrap_or(0.0);
+                let synthetic_score = scores
+                    .get(QualityLabel::Synthetic.to_string().as_str())
+                    .copied()
+                    .unwrap_or(0.0);
+
+                QualityAssessment {
+                    engagement_bait_score,
+                    synthetic_score,
+                }
+            } else {
+                QualityAssessment::default()
+            }
+        }
+        Err(_) => QualityAssessment::default(),
+    }
+}
+
+pub use TopicLabel as ClassificationLabel;

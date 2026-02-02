@@ -1,9 +1,6 @@
 use regex::Regex;
 use std::sync::LazyLock;
 
-pub const WEIGHT_KEYWORD: f32 = 0.25;
-pub const WEIGHT_HASHTAG: f32 = 0.05;
-
 static WORD_SPLIT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[^a-zA-Z0-9]+").unwrap());
 static HASHTAG_PATTERN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"#\w+").unwrap());
 
@@ -148,7 +145,6 @@ mod tests {
 
     #[test]
     fn test_bonus_keyword_detection() {
-        assert_eq!(WEIGHT_KEYWORD, 0.25);
         let (found, count) = has_keywords("Working on a gamedev project");
         assert!(found);
         assert_eq!(count, 1);
@@ -156,7 +152,6 @@ mod tests {
 
     #[test]
     fn test_bonus_hashtag_detection() {
-        assert_eq!(WEIGHT_HASHTAG, 0.05);
         let (found, count) = has_hashtags("Progress update #gamedev #indiedev");
         assert!(found);
         assert_eq!(count, 2);

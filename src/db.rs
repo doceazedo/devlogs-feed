@@ -39,6 +39,11 @@ pub struct Post {
     pub classification_score: f32,
     pub has_media: i32,
     pub is_first_person: i32,
+    pub author_did: Option<String>,
+    pub image_count: i32,
+    pub has_alt_text: i32,
+    pub link_count: i32,
+    pub promo_link_count: i32,
 }
 
 #[derive(Insertable, Debug, Clone)]
@@ -57,6 +62,11 @@ pub struct NewPost {
     pub classification_score: f32,
     pub has_media: i32,
     pub is_first_person: i32,
+    pub author_did: Option<String>,
+    pub image_count: i32,
+    pub has_alt_text: i32,
+    pub link_count: i32,
+    pub promo_link_count: i32,
 }
 
 #[derive(Insertable, Debug, Clone)]
@@ -123,6 +133,17 @@ pub fn get_feed(conn: &mut SqliteConnection, cutoff_timestamp: i64) -> QueryResu
         .filter(timestamp.gt(cutoff_timestamp))
         .order(final_score.desc())
         .load::<Post>(conn)
+}
+
+pub fn post_exists(conn: &mut SqliteConnection, post_uri: &str) -> bool {
+    use crate::schema::posts::dsl::*;
+
+    posts
+        .filter(uri.eq(post_uri))
+        .count()
+        .get_result::<i64>(conn)
+        .unwrap_or(0)
+        > 0
 }
 
 pub fn cleanup_old_posts(

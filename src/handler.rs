@@ -1,23 +1,30 @@
 use crate::db::{self, DbPool, NewLike, NewPost};
+use crate::engagement::EngagementTracker;
 use crate::scoring::{
-    apply_time_decay, has_hashtags, has_keywords, is_first_person, promo_penalty, should_prefilter,
-    MLHandle, PostScorer, ScoreBreakdown, ScoringSignals,
+    apply_filters, apply_ml_filter, apply_time_decay, calculate_priority, extract_content_signals,
+    has_hashtags, has_keywords, label_multiplier, passes_threshold, Filter, FilterResult, MLHandle,
+    MediaInfo, PrioritySignals,
 };
-use crate::utils::{log_accepted_post, log_feed_error, log_feed_served, log_rejected_post};
+use crate::utils::{
+    log_accepted_post, log_feed_error, log_feed_served, log_filter_rejected,
+    log_ml_filter_rejected, log_rejected_post,
+};
 use chrono::Utc;
+use rand::Rng;
 use skyfeed::{Embed, FeedHandler, FeedRequest, FeedResult, Post, Uri};
+use std::cmp::Ordering;
 
 pub const FEED_CUTOFF_HOURS: i64 = 96;
 pub const FEED_DEFAULT_LIMIT: usize = 50;
 pub const FEED_MAX_LIMIT: usize = 500;
-
 pub const MAX_STORED_POSTS: i64 = 5000;
+pub const SHUFFLE_VARIANCE: f32 = 0.20;
 
 #[derive(Clone)]
 pub struct GameDevFeedHandler {
     pool: DbPool,
     ml_handle: MLHandle,
-    scorer: PostScorer,
+    engagement: EngagementTracker,
     pending_posts: Vec<NewPost>,
     pending_likes: Vec<NewLike>,
     pending_deletes: Vec<String>,
@@ -26,10 +33,11 @@ pub struct GameDevFeedHandler {
 
 impl GameDevFeedHandler {
     pub fn new(pool: DbPool, ml_handle: MLHandle) -> Self {
+        let engagement = EngagementTracker::new(pool.clone());
         Self {
             pool,
             ml_handle,
-            scorer: PostScorer::default(),
+            engagement,
             pending_posts: Vec::new(),
             pending_likes: Vec::new(),
             pending_deletes: Vec::new(),
@@ -37,73 +45,34 @@ impl GameDevFeedHandler {
         }
     }
 
-    fn has_media(post: &Post) -> bool {
-        matches!(
-            &post.embed,
-            Some(Embed::Images(_)) | Some(Embed::Video(_)) | Some(Embed::QuoteWithMedia(_, _))
-        )
-    }
-
-    fn has_video(post: &Post) -> bool {
-        matches!(
-            &post.embed,
-            Some(Embed::Video(_)) | Some(Embed::QuoteWithMedia(_, skyfeed::MediaEmbed::Video(_)))
-        )
-    }
-
-    fn image_count(post: &Post) -> usize {
+    fn extract_media_info(post: &Post) -> MediaInfo {
         match &post.embed {
-            Some(Embed::Images(images)) => images.len(),
-            Some(Embed::QuoteWithMedia(_, skyfeed::MediaEmbed::Images(images))) => images.len(),
-            _ => 0,
+            Some(Embed::Images(images)) => MediaInfo {
+                image_count: images.len().min(255) as u8,
+                has_video: false,
+                has_alt_text: images.iter().any(|img| !img.alt_text.is_empty()),
+            },
+            Some(Embed::Video(_)) => MediaInfo {
+                image_count: 0,
+                has_video: true,
+                has_alt_text: false,
+            },
+            Some(Embed::QuoteWithMedia(_, skyfeed::MediaEmbed::Images(images))) => MediaInfo {
+                image_count: images.len().min(255) as u8,
+                has_video: false,
+                has_alt_text: images.iter().any(|img| !img.alt_text.is_empty()),
+            },
+            Some(Embed::QuoteWithMedia(_, skyfeed::MediaEmbed::Video(_))) => MediaInfo {
+                image_count: 0,
+                has_video: true,
+                has_alt_text: false,
+            },
+            _ => MediaInfo::default(),
         }
     }
 
-    async fn score_post(&self, post: &Post) -> Option<ScoreBreakdown> {
-        let text = post.text.clone();
-
-        if should_prefilter(&text, post.langs.first().map(|s| s.as_str())).is_some() {
-            return None;
-        }
-
-        let (found_keywords, keyword_count) = has_keywords(&text);
-        let (found_hashtags, hashtag_count) = has_hashtags(&text);
-        if !found_keywords && !found_hashtags {
-            return None;
-        }
-
-        let mut signals = ScoringSignals::new();
-        signals.has_keywords = found_keywords;
-        signals.keyword_count = keyword_count;
-        signals.has_hashtags = found_hashtags;
-        signals.hashtag_count = hashtag_count;
-        signals.is_first_person = is_first_person(&text);
-        signals.has_media = Self::has_media(post);
-        signals.has_video = Self::has_video(post);
-        signals.image_count = Self::image_count(post);
-        let promo_breakdown = promo_penalty(&text);
-        signals.promo_penalty = promo_breakdown.total_penalty;
-        signals.promo_breakdown = promo_breakdown;
-
-        let ml_scores = self.ml_handle.score(text.clone()).await;
-        signals.semantic_score = ml_scores.semantic_score;
-        signals.classification_score = ml_scores.classification_score;
-        signals.classification_label = ml_scores.best_label.clone();
-        signals.negative_rejection = ml_scores.negative_rejection;
-        signals.is_negative_label = ml_scores.is_negative_label;
-        signals.negative_label = ml_scores.best_label.clone();
-        signals.negative_label_score = ml_scores.best_label_score;
-
-        let breakdown = self.scorer.evaluate(&signals);
-        let text_preview = crate::utils::truncate_text(&text, 300);
-
-        if breakdown.passes() {
-            log_accepted_post(text_preview, &breakdown, &ml_scores);
-            Some(breakdown)
-        } else {
-            log_rejected_post(text_preview, &breakdown);
-            None
-        }
+    fn is_spammer(&self, did: &str) -> bool {
+        self.engagement.is_spammer(did)
     }
 
     pub fn flush_pending(&mut self) -> Result<(), diesel::result::Error> {
@@ -149,7 +118,15 @@ impl GameDevFeedHandler {
         let now = Utc::now().timestamp();
         let cutoff = now - (FEED_CUTOFF_HOURS * 3600);
 
-        db::cleanup_old_posts(&mut conn, cutoff, MAX_STORED_POSTS)
+        let engagement_deleted = self.engagement.cleanup_old_engagement(cutoff).unwrap_or(0);
+        let posts_deleted = db::cleanup_old_posts(&mut conn, cutoff, MAX_STORED_POSTS)?;
+
+        Ok(engagement_deleted + posts_deleted)
+    }
+
+    #[allow(dead_code)]
+    pub fn engagement_tracker(&self) -> &EngagementTracker {
+        &self.engagement
     }
 }
 
@@ -159,24 +136,97 @@ impl FeedHandler for GameDevFeedHandler {
     }
 
     async fn insert_post(&mut self, post: Post) {
-        if let Some(breakdown) = self.score_post(&post).await {
+        let text = &post.text;
+        let lang = post.langs.first().map(|s| s.as_str());
+        let author_did = post.author_did.0.as_str();
+
+        let filter_result = apply_filters(text, lang, Some(author_did), |did| self.is_spammer(did));
+
+        if let FilterResult::Reject(filter) = filter_result {
+            log_filter_rejected(text, &filter);
+            return;
+        }
+
+        let (found_keywords, _keyword_count) = has_keywords(text);
+        let (found_hashtags, _hashtag_count) = has_hashtags(text);
+
+        if !found_keywords && !found_hashtags {
+            log_filter_rejected(
+                text,
+                &Filter::BlockedKeyword("no-gamedev-signals".to_string()),
+            );
+            return;
+        }
+
+        let ml_scores = self.ml_handle.score(text.clone()).await;
+
+        let ml_filter_result = apply_ml_filter(
+            &ml_scores.best_label,
+            ml_scores.best_label_score,
+            ml_scores.is_negative_label,
+        );
+
+        if let FilterResult::Reject(_) = ml_filter_result {
+            log_ml_filter_rejected(text, &ml_scores.best_label, ml_scores.best_label_score);
+            return;
+        }
+
+        let media_info = Self::extract_media_info(&post);
+        let content = extract_content_signals(text, &media_info);
+
+        let signals = PrioritySignals {
+            topic_classification_score: ml_scores.classification_score,
+            semantic_score: ml_scores.semantic_score,
+            topic_label: ml_scores.best_label.clone(),
+            label_multiplier: label_multiplier(&ml_scores.best_label),
+            engagement_bait_score: ml_scores.quality.engagement_bait_score,
+            synthetic_score: ml_scores.quality.synthetic_score,
+            is_first_person: content.is_first_person,
+            images: content.images,
+            has_video: content.has_video,
+            has_alt_text: content.has_alt_text,
+            link_count: content.link_count,
+            promo_link_count: content.promo_link_count,
+            engagement_velocity: 0.0,
+            reply_count: 0,
+            repost_count: 0,
+            like_count: 0,
+        };
+
+        let breakdown = calculate_priority(&signals);
+        let text_preview = crate::utils::truncate_text(text, 300);
+
+        if passes_threshold(&breakdown) {
+            log_accepted_post(text_preview, &breakdown, &ml_scores);
+
             let new_post = NewPost {
                 uri: post.uri.0.clone(),
-                text: post.text.clone(),
+                text: text.clone(),
                 timestamp: post.timestamp.timestamp(),
-                final_score: breakdown.final_score,
-                priority: breakdown.priority,
-                confidence: breakdown.confidence.label().to_string(),
-                post_type: breakdown.classification_label.clone(),
-                keyword_score: if breakdown.has_keywords { 1.0 } else { 0.0 },
-                hashtag_score: if breakdown.has_hashtags { 1.0 } else { 0.0 },
-                semantic_score: breakdown.semantic_score,
-                classification_score: breakdown.classification_score,
-                has_media: if breakdown.has_media { 1 } else { 0 },
-                is_first_person: if breakdown.is_first_person { 1 } else { 0 },
+                final_score: breakdown.final_priority,
+                priority: breakdown.final_priority,
+                confidence: breakdown.confidence.to_string(),
+                post_type: breakdown.topic_label.clone(),
+                keyword_score: if found_keywords { 1.0 } else { 0.0 },
+                hashtag_score: if found_hashtags { 1.0 } else { 0.0 },
+                semantic_score: ml_scores.semantic_score,
+                classification_score: ml_scores.classification_score,
+                has_media: if media_info.image_count > 0 || media_info.has_video {
+                    1
+                } else {
+                    0
+                },
+                is_first_person: if content.is_first_person { 1 } else { 0 },
+                author_did: Some(author_did.to_string()),
+                image_count: content.images as i32,
+                has_alt_text: if content.has_alt_text { 1 } else { 0 },
+                link_count: content.link_count as i32,
+                promo_link_count: content.promo_link_count as i32,
             };
 
             self.pending_posts.push(new_post);
+        } else {
+            log_rejected_post(text_preview, &breakdown);
         }
     }
 
@@ -185,6 +235,7 @@ impl FeedHandler for GameDevFeedHandler {
     }
 
     async fn insert_like(&mut self, like_uri: Uri, liked_post_uri: Uri) {
+        self.engagement.record_like(&liked_post_uri.0).ok();
         self.pending_likes.push(NewLike {
             post_uri: liked_post_uri.0.clone(),
             like_uri: like_uri.0.clone(),
@@ -232,16 +283,25 @@ impl FeedHandler for GameDevFeedHandler {
             .map(|l| (l as usize).min(FEED_MAX_LIMIT))
             .unwrap_or(FEED_DEFAULT_LIMIT);
 
+        let mut rng = rand::rng();
+
         let mut scored_posts: Vec<_> = posts
             .iter()
             .map(|p| {
                 let post_time = chrono::DateTime::from_timestamp(p.timestamp, 0).unwrap_or(now);
-                let decayed_score = apply_time_decay(p.priority, post_time, now);
-                (p, decayed_score)
+                let base_score = apply_time_decay(p.priority, post_time, now);
+
+                let velocity = self.engagement.get_velocity(&p.uri);
+                let engagement_boost = (velocity.ln_1p() * 0.1).min(0.5);
+
+                let variance = rng.random_range(-SHUFFLE_VARIANCE..SHUFFLE_VARIANCE);
+                let final_score = (base_score + engagement_boost) * (1.0 + variance);
+
+                (p, final_score)
             })
             .collect();
 
-        scored_posts.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        scored_posts.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
 
         let page_posts: Vec<_> = scored_posts
             .into_iter()
@@ -258,7 +318,7 @@ impl FeedHandler for GameDevFeedHandler {
 
         let feed: Vec<Uri> = page_posts.iter().map(|(p, _)| Uri(p.uri.clone())).collect();
 
-        log_feed_served(feed.len(), total_count);
+        log_feed_served(feed.len(), total_count, true);
 
         FeedResult {
             cursor: next_cursor,
