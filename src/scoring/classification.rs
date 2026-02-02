@@ -154,10 +154,15 @@ impl MLHandle {
 }
 
 fn run_ml_worker(request_rx: mpsc::Receiver<MLRequest>, worker_id: usize) -> Result<()> {
-    log_ml_step(&format!("Worker {worker_id}: Loading zero-shot classification model..."));
+    log_ml_step(&format!(
+        "Worker {worker_id}: Loading zero-shot classification model..."
+    ));
     let start = Instant::now();
     let classifier = ZeroShotClassificationModel::new(Default::default())?;
-    log_ml_model_loaded(&format!("Worker {worker_id}: Zero-shot model"), start.elapsed().as_secs_f32());
+    log_ml_model_loaded(
+        &format!("Worker {worker_id}: Zero-shot model"),
+        start.elapsed().as_secs_f32(),
+    );
 
     let (embeddings, reference_embeddings) = compute_reference_embeddings()?;
 
