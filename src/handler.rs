@@ -1,4 +1,4 @@
-use crate::db::{self, DbPool, NewLike, NewPost};
+use crate::db::{self, get_post_author, DbPool, NewLike, NewPost};
 use crate::engagement::EngagementTracker;
 use crate::scoring::{
     apply_filters, apply_ml_filter, apply_time_decay, calculate_priority, calculate_score,
@@ -94,6 +94,19 @@ impl GameDevFeedHandler {
         self.engagement.is_spammer(did)
     }
 
+    fn track_reply_engagement(&self, parent_uri: &str, reply_uri: &str, reply_author: &str) {
+        let mut conn = match self.pool.get() {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+
+        if let Some(parent_author) = get_post_author(&mut conn, parent_uri) {
+            self.engagement
+                .record_reply(parent_uri, reply_uri, reply_author, &parent_author)
+                .ok();
+        }
+    }
+
     pub fn flush_pending(&mut self) -> Result<(), diesel::result::Error> {
         if self.pending_posts.is_empty()
             && self.pending_likes.is_empty()
@@ -166,6 +179,10 @@ impl FeedHandler for GameDevFeedHandler {
         let text = &post.text;
         let lang = post.langs.first().map(|s| s.as_str());
         let author_did = post.author_did.0.as_str();
+
+        if let Some(reply) = &post.reply {
+            self.track_reply_engagement(&reply.parent.0, &post.uri.0, author_did);
+        }
 
         let mut assessment = PostAssessment::new(text);
 

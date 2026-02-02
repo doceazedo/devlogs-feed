@@ -5,7 +5,8 @@ use diesel::prelude::*;
 use diesel::result::Error as DieselError;
 
 const SPAM_REPOST_THRESHOLD: f32 = 10.0;
-const VELOCITY_WINDOW_HOURS: i64 = 6;
+const SPAM_REPLY_THRESHOLD: f32 = 10.0;
+const VELOCITY_WINDOW_HOURS: i64 = 1;
 
 pub const REPLY_WEIGHT: f32 = 3.0;
 pub const REPOST_WEIGHT: f32 = 2.0;
@@ -16,7 +17,7 @@ pub const LIKE_WEIGHT: f32 = 1.0;
 pub struct SpamDetected {
     pub did: String,
     pub reason: String,
-    pub repost_frequency: Option<f32>,
+    pub frequency: Option<f32>,
 }
 
 #[derive(Insertable, Debug)]
@@ -91,22 +92,36 @@ impl EngagementTracker {
         Self { pool }
     }
 
-    #[allow(dead_code)]
     pub fn record_reply(
         &self,
         post_uri: &str,
         reply_uri: &str,
         reply_author: &str,
         post_author: &str,
-    ) -> Result<(), DieselError> {
+    ) -> Result<(), SpamDetected> {
         if reply_author == post_author {
             return Ok(());
         }
 
-        let mut conn = self
-            .pool
-            .get()
-            .map_err(|_| DieselError::BrokenTransactionManager)?;
+        let mut conn = self.pool.get().map_err(|_| SpamDetected {
+            did: reply_author.to_string(),
+            reason: "database error".to_string(),
+            frequency: None,
+        })?;
+
+        if self.is_spammer_internal(&mut conn, reply_author) {
+            return Err(SpamDetected {
+                did: reply_author.to_string(),
+                reason: "known spammer".to_string(),
+                frequency: None,
+            });
+        }
+
+        if let Some(spam) = self.check_reply_spam(&mut conn, reply_author) {
+            self.flag_spammer_internal(&mut conn, reply_author, &spam.reason, spam.frequency)
+                .ok();
+            return Err(spam);
+        }
 
         let new_reply = NewReply {
             post_uri: post_uri.to_string(),
@@ -117,9 +132,10 @@ impl EngagementTracker {
 
         diesel::insert_or_ignore_into(replies::table)
             .values(&new_reply)
-            .execute(&mut conn)?;
+            .execute(&mut conn)
+            .ok();
 
-        self.update_engagement_cache(&mut conn, post_uri)?;
+        self.update_engagement_cache(&mut conn, post_uri).ok();
 
         Ok(())
     }
@@ -134,17 +150,12 @@ impl EngagementTracker {
         let mut conn = self.pool.get().map_err(|_| SpamDetected {
             did: reposter_did.to_string(),
             reason: "database error".to_string(),
-            repost_frequency: None,
+            frequency: None,
         })?;
 
-        if let Some(spam) = self.check_spam_behavior(&mut conn, reposter_did) {
-            self.flag_spammer_internal(
-                &mut conn,
-                reposter_did,
-                &spam.reason,
-                spam.repost_frequency,
-            )
-            .ok();
+        if let Some(spam) = self.check_repost_spam(&mut conn, reposter_did) {
+            self.flag_spammer_internal(&mut conn, reposter_did, &spam.reason, spam.frequency)
+                .ok();
             return Err(spam);
         }
 
@@ -173,7 +184,7 @@ impl EngagementTracker {
         self.update_engagement_cache(&mut conn, post_uri)
     }
 
-    fn check_spam_behavior(
+    fn check_repost_spam(
         &self,
         conn: &mut diesel::SqliteConnection,
         reposter_did: &str,
@@ -194,7 +205,35 @@ impl EngagementTracker {
             return Some(SpamDetected {
                 did: reposter_did.to_string(),
                 reason: format!("high repost frequency: {:.1}/hr", frequency),
-                repost_frequency: Some(frequency),
+                frequency: Some(frequency),
+            });
+        }
+
+        None
+    }
+
+    fn check_reply_spam(
+        &self,
+        conn: &mut diesel::SqliteConnection,
+        author_did: &str,
+    ) -> Option<SpamDetected> {
+        let now = Utc::now().timestamp();
+        let window_start = now - (VELOCITY_WINDOW_HOURS * 3600);
+
+        let recent_count: i64 = replies::table
+            .filter(replies::author_did.eq(author_did))
+            .filter(replies::timestamp.gt(window_start))
+            .count()
+            .get_result(conn)
+            .unwrap_or(0);
+
+        let frequency = recent_count as f32 / VELOCITY_WINDOW_HOURS as f32;
+
+        if frequency >= SPAM_REPLY_THRESHOLD {
+            return Some(SpamDetected {
+                did: author_did.to_string(),
+                reason: format!("high reply frequency: {:.1}/hr", frequency),
+                frequency: Some(frequency),
             });
         }
 
@@ -293,10 +332,14 @@ impl EngagementTracker {
             Err(_) => return false,
         };
 
+        self.is_spammer_internal(&mut conn, did)
+    }
+
+    fn is_spammer_internal(&self, conn: &mut diesel::SqliteConnection, did: &str) -> bool {
         spammers::table
             .filter(spammers::did.eq(did))
             .count()
-            .get_result::<i64>(&mut conn)
+            .get_result::<i64>(conn)
             .unwrap_or(0)
             > 0
     }

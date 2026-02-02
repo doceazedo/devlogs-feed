@@ -146,6 +146,17 @@ pub fn post_exists(conn: &mut SqliteConnection, post_uri: &str) -> bool {
         > 0
 }
 
+pub fn get_post_author(conn: &mut SqliteConnection, post_uri: &str) -> Option<String> {
+    use crate::schema::posts::dsl::*;
+
+    posts
+        .filter(uri.eq(post_uri))
+        .select(author_did)
+        .first::<Option<String>>(conn)
+        .ok()
+        .flatten()
+}
+
 pub fn cleanup_old_posts(
     conn: &mut SqliteConnection,
     cutoff_timestamp: i64,
