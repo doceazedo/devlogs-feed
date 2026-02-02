@@ -64,7 +64,7 @@ async fn main() {
     log_newline();
     log_ml_step("Loading models...");
     log_dimmed("└─ This may take a while on first run");
-    let ml_handle = match MLHandle::spawn() {
+    let ml_handle = match MLHandle::spawn(1) {
         Ok(handle) => handle,
         Err(e) => {
             log_generic_error("[ERROR]", &format!("Failed to load ML models: {e}"));
@@ -199,14 +199,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_full_evaluation_accept() {
-        let ml_handle = MLHandle::spawn().expect("Failed to spawn ML handle");
+        let ml_handle = MLHandle::spawn(1).expect("Failed to spawn ML handle");
         tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
         evaluate_urls(POSTS_EXPECTED_ACCEPT, &ml_handle, true).await;
     }
 
     #[tokio::test]
     async fn test_full_evaluation_reject() {
-        let ml_handle = MLHandle::spawn().expect("Failed to spawn ML handle");
+        let ml_handle = MLHandle::spawn(1).expect("Failed to spawn ML handle");
         tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
         evaluate_urls(POSTS_EXPECTED_REJECT, &ml_handle, false).await;
     }

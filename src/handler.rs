@@ -5,6 +5,7 @@ use crate::scoring::{
 };
 use crate::utils::{log_accepted_post, log_feed_error, log_feed_served, log_rejected_post};
 use chrono::Utc;
+use rayon::prelude::*;
 use skyfeed::{Embed, FeedHandler, FeedRequest, FeedResult, Post, Uri};
 
 pub const FEED_CUTOFF_HOURS: i64 = 96;
@@ -233,7 +234,7 @@ impl FeedHandler for GameDevFeedHandler {
             .unwrap_or(FEED_DEFAULT_LIMIT);
 
         let mut scored_posts: Vec<_> = posts
-            .iter()
+            .par_iter()
             .map(|p| {
                 let post_time = chrono::DateTime::from_timestamp(p.timestamp, 0).unwrap_or(now);
                 let decayed_score = apply_time_decay(p.priority, post_time, now);
@@ -241,7 +242,7 @@ impl FeedHandler for GameDevFeedHandler {
             })
             .collect();
 
-        scored_posts.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        scored_posts.par_sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
         let page_posts: Vec<_> = scored_posts
             .into_iter()

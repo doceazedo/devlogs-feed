@@ -1,3 +1,4 @@
+use rayon::prelude::*;
 use regex::Regex;
 use std::sync::LazyLock;
 
@@ -127,7 +128,7 @@ fn contains_keyword(text: &str, keyword: &str) -> bool {
 pub fn has_keywords(text: &str) -> (bool, usize) {
     let text_lower = text.to_lowercase();
     let count = GAMEDEV_KEYWORDS
-        .iter()
+        .par_iter()
         .filter(|kw| contains_keyword(&text_lower, kw))
         .count();
     (count > 0, count)
@@ -136,7 +137,7 @@ pub fn has_keywords(text: &str) -> (bool, usize) {
 pub fn has_hashtags(text: &str) -> (bool, usize) {
     let text_lower = text.to_lowercase();
     let count = GAMEDEV_HASHTAGS
-        .iter()
+        .par_iter()
         .filter(|tag| text_lower.contains(*tag))
         .count();
     (count > 0, count)

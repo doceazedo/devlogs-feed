@@ -5,11 +5,13 @@ use crate::scoring::{
 };
 use crate::utils::{log_accepted_post, log_rejected_post};
 use chrono::{DateTime, Utc};
+use futures::{stream, StreamExt};
 use serde::{Deserialize, Serialize};
 
 pub const BACKFILL_MAX_HOURS: i64 = 24;
 const BACKFILL_SEARCH_TERMS: &[&str] = &["#gamedev", "devlog"];
 const SEARCH_LIMIT: usize = 100;
+const CONCURRENT_SCORES: usize = 8;
 
 #[derive(Debug, Serialize)]
 struct CreateSessionRequest {
@@ -147,18 +149,25 @@ async fn search_and_insert(
         let response =
             fetch_search_page(client, access_token, query, since, until, cursor.as_deref()).await?;
 
-        let mut posts_to_insert = Vec::new();
+        let posts_to_score: Vec<_> = response
+            .posts
+            .into_iter()
+            .filter(|post| {
+                if seen_uris.contains(&post.uri) {
+                    false
+                } else {
+                    seen_uris.insert(post.uri.clone());
+                    true
+                }
+            })
+            .collect();
 
-        for post in response.posts {
-            if seen_uris.contains(&post.uri) {
-                continue;
-            }
-            seen_uris.insert(post.uri.clone());
-
-            if let Some(new_post) = score_post(&post, ml_handle, scorer).await {
-                posts_to_insert.push(new_post);
-            }
-        }
+        let posts_to_insert: Vec<_> = stream::iter(posts_to_score)
+            .map(|post| async move { score_post(&post, ml_handle, scorer).await })
+            .buffer_unordered(CONCURRENT_SCORES)
+            .filter_map(|result| async { result })
+            .collect()
+            .await;
 
         if !posts_to_insert.is_empty() {
             let mut conn = pool.get()?;

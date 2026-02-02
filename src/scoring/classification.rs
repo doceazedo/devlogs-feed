@@ -1,13 +1,14 @@
 use anyhow::Result;
 use rust_bert::pipelines::zero_shot_classification::ZeroShotClassificationModel;
 use std::str::FromStr;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Instant;
 use strum::{Display, EnumIter, IntoEnumIterator, IntoStaticStr};
 
 use super::semantic::{compute_reference_embeddings, semantic_similarity};
-use crate::utils::{log_ml_error, log_ml_model_loaded, log_ml_ready, log_ml_step};
+use crate::utils::{log_ml_error, log_ml_model_loaded, log_ml_step};
 
 pub const WEIGHT_CLASSIFICATION: f32 = 0.50;
 
@@ -109,27 +110,38 @@ pub struct MLScores {
 
 #[derive(Clone)]
 pub struct MLHandle {
-    request_tx: mpsc::Sender<MLRequest>,
+    workers: Vec<mpsc::Sender<MLRequest>>,
+    next_worker: std::sync::Arc<AtomicUsize>,
 }
 
 impl MLHandle {
-    pub fn spawn() -> Result<Self> {
-        let (request_tx, request_rx) = mpsc::channel::<MLRequest>();
+    pub fn spawn(num_workers: usize) -> Result<Self> {
+        let num_workers = num_workers.max(1);
+        let mut workers = Vec::with_capacity(num_workers);
 
-        thread::spawn(move || {
-            if let Err(e) = run_ml_worker(request_rx) {
-                log_ml_error(&format!("Worker failed: {e}"));
-            }
-        });
+        for worker_id in 0..num_workers {
+            let (request_tx, request_rx) = mpsc::channel::<MLRequest>();
+            workers.push(request_tx);
 
-        Ok(Self { request_tx })
+            thread::spawn(move || {
+                if let Err(e) = run_ml_worker(request_rx, worker_id) {
+                    log_ml_error(&format!("Worker {worker_id} failed: {e}"));
+                }
+            });
+        }
+
+        Ok(Self {
+            workers,
+            next_worker: std::sync::Arc::new(AtomicUsize::new(0)),
+        })
     }
 
     pub async fn score(&self, text: String) -> MLScores {
         let (response_tx, response_rx) = tokio::sync::oneshot::channel();
 
-        if self
-            .request_tx
+        let worker_idx = self.next_worker.fetch_add(1, Ordering::Relaxed) % self.workers.len();
+
+        if self.workers[worker_idx]
             .send(MLRequest::Score { text, response_tx })
             .is_err()
         {
@@ -141,15 +153,15 @@ impl MLHandle {
     }
 }
 
-fn run_ml_worker(request_rx: mpsc::Receiver<MLRequest>) -> Result<()> {
-    log_ml_step("Loading zero-shot classification model...");
+fn run_ml_worker(request_rx: mpsc::Receiver<MLRequest>, worker_id: usize) -> Result<()> {
+    log_ml_step(&format!("Worker {worker_id}: Loading zero-shot classification model..."));
     let start = Instant::now();
     let classifier = ZeroShotClassificationModel::new(Default::default())?;
-    log_ml_model_loaded("Zero-shot model", start.elapsed().as_secs_f32());
+    log_ml_model_loaded(&format!("Worker {worker_id}: Zero-shot model"), start.elapsed().as_secs_f32());
 
     let (embeddings, reference_embeddings) = compute_reference_embeddings()?;
 
-    log_ml_ready();
+    log_ml_step(&format!("Worker {worker_id}: Ready"));
 
     for request in request_rx {
         let MLRequest::Score { text, response_tx } = request;

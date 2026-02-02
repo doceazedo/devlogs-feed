@@ -1,4 +1,5 @@
 use anyhow::Result;
+use rayon::prelude::*;
 use rust_bert::pipelines::sentence_embeddings::{
     SentenceEmbeddingsBuilder, SentenceEmbeddingsModel, SentenceEmbeddingsModelType,
 };
@@ -70,18 +71,13 @@ pub fn semantic_similarity(
     match result {
         Ok(text_embeddings) => {
             if let Some(text_embedding) = text_embeddings.first() {
-                let mut best_idx = 0;
-                let mut best_sim = 0.0_f32;
-
-                for (idx, ref_emb) in reference_embeddings.iter().enumerate() {
-                    let sim = cosine_similarity(text_embedding, ref_emb);
-                    if sim > best_sim {
-                        best_sim = sim;
-                        best_idx = idx;
-                    }
-                }
-
-                (best_sim, best_idx)
+                reference_embeddings
+                    .par_iter()
+                    .enumerate()
+                    .map(|(idx, ref_emb)| (cosine_similarity(text_embedding, ref_emb), idx))
+                    .max_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))
+                    .map(|(sim, idx)| (sim, idx))
+                    .unwrap_or((0.0, 0))
             } else {
                 (0.0, 0)
             }
