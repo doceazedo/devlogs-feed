@@ -63,20 +63,18 @@ pub fn log_dimmed(message: &str) {
     println!("  {}", message.dimmed());
 }
 
-pub fn log_startup_config(did: &str, host: &str, port: u16, db: &str, limit: usize, ml_workers: usize) {
+pub fn log_startup_config(did: &str, host: &str, port: u16, db: &str, limit: usize) {
     println!("{}", "Game Dev Progress Feed".green().bold());
     println!("════════════════════════════════════════");
     for (l, v) in [("DID", did), ("Hostname", host), ("Database", db)] {
         println!("{} {}: {}", "[CONFIG]".cyan(), l, v);
     }
     println!(
-        "{} Port: {}\n{} Firehose limit: {}\n{} ML workers: {}\n",
+        "{} Port: {}\n{} Firehose limit: {}\n",
         "[CONFIG]".cyan(),
         port,
         "[CONFIG]".cyan(),
-        limit,
-        "[CONFIG]".cyan(),
-        ml_workers
+        limit
     );
 }
 

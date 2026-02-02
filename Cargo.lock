@@ -896,8 +896,6 @@ dependencies = [
  "console",
  "diesel",
  "dotenvy",
- "futures",
- "rayon",
  "regex",
  "reqwest 0.12.28",
  "rust-bert",

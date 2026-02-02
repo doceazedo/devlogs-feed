@@ -48,10 +48,6 @@ async fn main() -> Result<()> {
         .and_then(|l| l.parse().ok())
         .unwrap_or(5000);
     let database_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| "feed.db".to_string());
-    let ml_workers: usize = std::env::var("ML_WORKERS")
-        .ok()
-        .and_then(|w| w.parse().ok())
-        .unwrap_or(1);
 
     log_startup_config(
         &publisher_did,
@@ -59,7 +55,6 @@ async fn main() -> Result<()> {
         port,
         &database_url,
         firehose_limit,
-        ml_workers,
     );
 
     log_db_status("Initializing SQLite connection pool...");
@@ -71,9 +66,9 @@ async fn main() -> Result<()> {
     }
     log_db_ready();
 
-    utils::log_ml_loading(&format!("Spawning {ml_workers} ML worker thread(s)..."));
+    utils::log_ml_loading("Spawning ML worker thread...");
     utils::log_ml_loading("Models will load in background (this may take a while on first run)");
-    let ml_handle = MLHandle::spawn(ml_workers)?;
+    let ml_handle = MLHandle::spawn()?;
 
     utils::log_backfill_start();
     match backfill::run_backfill(pool.clone(), ml_handle.clone()).await {
