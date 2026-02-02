@@ -1,4 +1,3 @@
-mod backfill;
 mod db;
 mod handler;
 mod schema;
@@ -69,12 +68,6 @@ async fn main() -> Result<()> {
     utils::log_ml_loading("Spawning ML worker thread...");
     utils::log_ml_loading("Models will load in background (this may take a while on first run)");
     let ml_handle = MLHandle::spawn()?;
-
-    utils::log_backfill_start();
-    match backfill::run_backfill(pool.clone(), ml_handle.clone()).await {
-        Ok(count) => utils::log_backfill_done(count),
-        Err(e) => utils::log_backfill_error(&e.to_string()),
-    }
 
     let handler = Arc::new(Mutex::new(GameDevFeedHandler::new(pool, ml_handle)));
 

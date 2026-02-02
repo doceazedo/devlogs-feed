@@ -151,11 +151,3 @@ pub fn cleanup_old_posts(
 
     Ok(deleted_by_age + deleted_by_limit)
 }
-
-pub fn get_latest_post_timestamp(conn: &mut SqliteConnection) -> QueryResult<Option<i64>> {
-    use crate::schema::posts::dsl::*;
-
-    posts
-        .select(diesel::dsl::max(timestamp))
-        .first::<Option<i64>>(conn)
-}
