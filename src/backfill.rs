@@ -8,9 +8,10 @@ use chrono::{DateTime, Utc};
 use futures::{stream, StreamExt};
 use serde::{Deserialize, Serialize};
 
-pub const BACKFILL_MAX_HOURS: i64 = 1;
+pub const BACKFILL_MAX_HOURS: i64 = 24;
 const BACKFILL_SEARCH_TERMS: &[&str] = &["#gamedev", "devlog"];
-const CONCURRENT_SCORES: usize = 5;
+const SEARCH_LIMIT: usize = 100;
+const CONCURRENT_SCORES: usize = 8;
 
 #[derive(Debug, Serialize)]
 struct CreateSessionRequest {
@@ -192,7 +193,7 @@ async fn fetch_search_page(
         urlencoding::encode(query),
         urlencoding::encode(since),
         urlencoding::encode(until),
-        1
+        SEARCH_LIMIT
     );
 
     if let Some(c) = cursor {
