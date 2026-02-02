@@ -1,6 +1,6 @@
 use devlogs_feed::scoring::{
-    apply_filters, apply_ml_filter, calculate_priority, extract_content_signals, has_hashtags,
-    has_keywords, label_multiplier, passes_threshold, FilterResult, MLHandle, MediaInfo,
+    apply_filters, apply_ml_filter, calculate_priority, calculate_score, extract_content_signals,
+    has_hashtags, has_keywords, label_multiplier, FilterResult, MLHandle, MediaInfo,
     PrioritySignals,
 };
 use devlogs_feed::utils::bluesky::{fetch_post, parse_bluesky_url};
@@ -46,6 +46,8 @@ async fn main() {
                     image_count: post.image_count.min(255) as u8,
                     has_video: post.has_video,
                     has_alt_text: false,
+                    external_uri: post.external_uri,
+                    facet_links: post.facet_links,
                 };
                 (post.text, media)
             }
@@ -59,6 +61,8 @@ async fn main() {
             image_count: if has_media_flag { 1 } else { 0 },
             has_video: has_video_flag,
             has_alt_text: has_alt_flag,
+            external_uri: None,
+            facet_links: Vec::new(),
         };
         (input, media)
     };
@@ -113,9 +117,9 @@ async fn score_post(text: &str, media: &MediaInfo, ml_handle: &MLHandle) {
     let content = extract_content_signals(text, media);
     assessment.set_content(content.clone(), media.clone());
 
+    let score = calculate_score(scores.classification_score, scores.semantic_score);
+
     let signals = PrioritySignals {
-        topic_classification_score: scores.classification_score,
-        semantic_score: scores.semantic_score,
         topic_label: scores.best_label.clone(),
         label_multiplier: label_multiplier(&scores.best_label),
         engagement_bait_score: scores.quality.engagement_bait_score,
@@ -132,11 +136,11 @@ async fn score_post(text: &str, media: &MediaInfo, ml_handle: &MLHandle) {
         like_count: 0,
     };
 
-    let breakdown = calculate_priority(&signals);
-    assessment.set_priority(signals.clone(), breakdown.clone());
+    let priority = calculate_priority(&score, &signals);
+    assessment.set_score_and_priority(score.clone(), signals.clone(), priority.clone());
 
-    let passed = passes_threshold(&breakdown);
-    assessment.set_threshold_result(passed, breakdown.final_priority);
+    let passed = score.passes_threshold();
+    assessment.set_threshold_result(passed);
     assessment.print();
 }
 
@@ -166,6 +170,8 @@ mod tests {
                 image_count: post.image_count.min(255) as u8,
                 has_video: post.has_video,
                 has_alt_text: false,
+                external_uri: post.external_uri.clone(),
+                facet_links: post.facet_links.clone(),
             };
             let result = evaluate_post(&post.text, media, ml_handle).await;
             let passes = result.passes();

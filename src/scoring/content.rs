@@ -18,6 +18,9 @@ const PROMO_DOMAINS: &[&str] = &[
     "epicgames.com",
     "humblebundle.com",
     "gamejolt.com",
+    "youtube.com",
+    "youtu.be",
+    "playtester.io",
 ];
 
 static URL_PATTERN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"https?://[^\s]+").unwrap());
@@ -37,11 +40,27 @@ pub struct MediaInfo {
     pub image_count: u8,
     pub has_video: bool,
     pub has_alt_text: bool,
+    pub external_uri: Option<String>,
+    pub facet_links: Vec<String>,
 }
 
 pub fn extract_content_signals(text: &str, media: &MediaInfo) -> ContentSignals {
     let is_first_person = detect_first_person(text);
-    let (link_count, promo_link_count) = count_links(text);
+    let (mut link_count, mut promo_link_count) = (0u8, 0u8);
+
+    for uri in &media.facet_links {
+        link_count = link_count.saturating_add(1);
+        if is_promo_domain(uri) {
+            promo_link_count = promo_link_count.saturating_add(1);
+        }
+    }
+
+    if let Some(ref uri) = media.external_uri {
+        link_count = link_count.saturating_add(1);
+        if is_promo_domain(uri) {
+            promo_link_count = promo_link_count.saturating_add(1);
+        }
+    }
 
     ContentSignals {
         is_first_person,
@@ -139,7 +158,7 @@ mod tests {
         assert!(is_promo_domain("https://kickstarter.com/project"));
         assert!(!is_promo_domain("https://example.com"));
         assert!(!is_promo_domain("https://twitter.com/user"));
-        assert!(!is_promo_domain("https://youtube.com/watch"));
+        assert!(is_promo_domain("https://youtube.com/watch"));
     }
 
     #[test]
@@ -148,9 +167,10 @@ mod tests {
             image_count: 2,
             has_video: false,
             has_alt_text: true,
+            external_uri: None,
+            facet_links: vec!["https://itch.io/game".to_string()],
         };
-        let signals =
-            extract_content_signals("I'm working on my game https://itch.io/game", &media);
+        let signals = extract_content_signals("I'm working on my game", &media);
 
         assert!(signals.is_first_person);
         assert_eq!(signals.images, 2);

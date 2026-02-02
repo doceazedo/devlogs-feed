@@ -1,16 +1,16 @@
 use crate::db::{self, DbPool, NewPost};
 use crate::scoring::{
-    apply_filters, apply_ml_filter, calculate_priority, extract_content_signals, has_hashtags,
-    has_keywords, label_multiplier, passes_threshold, FilterResult, MLHandle, MediaInfo,
+    apply_filters, apply_ml_filter, calculate_priority, calculate_score, extract_content_signals,
+    has_hashtags, has_keywords, label_multiplier, FilterResult, MLHandle, MediaInfo,
     PrioritySignals,
 };
-use crate::utils::bluesky::{create_session, search_posts, SearchPost};
+use crate::utils::bluesky::{create_session, extract_facet_links, search_posts, SearchPost};
 use crate::utils::logs::{self, PostAssessment};
 use chrono::Utc;
 
-pub const BACKFILL_LIMIT: usize = 100;
+pub const BACKFILL_LIMIT: usize = 200;
 pub const BACKFILL_HOURS: i64 = 96;
-const SEARCH_LIMIT: u32 = 25;
+const SEARCH_LIMIT: u32 = 50;
 
 pub async fn run_backfill(pool: DbPool, ml_handle: &MLHandle) {
     logs::log_backfill_start();
@@ -121,13 +121,14 @@ pub async fn run_backfill(pool: DbPool, ml_handle: &MLHandle) {
             continue;
         }
 
-        let media_info = extract_media_from_embed(&post.embed);
+        let mut media_info = extract_media_from_embed(&post.embed);
+        media_info.facet_links = extract_facet_links(&post.record.facets);
         let content = extract_content_signals(text, &media_info);
         assessment.set_content(content.clone(), media_info.clone());
 
+        let score = calculate_score(ml_scores.classification_score, ml_scores.semantic_score);
+
         let signals = PrioritySignals {
-            topic_classification_score: ml_scores.classification_score,
-            semantic_score: ml_scores.semantic_score,
             topic_label: ml_scores.best_label.clone(),
             label_multiplier: label_multiplier(&ml_scores.best_label),
             engagement_bait_score: ml_scores.quality.engagement_bait_score,
@@ -141,11 +142,11 @@ pub async fn run_backfill(pool: DbPool, ml_handle: &MLHandle) {
             ..Default::default()
         };
 
-        let breakdown = calculate_priority(&signals);
-        assessment.set_priority(signals.clone(), breakdown.clone());
+        let priority = calculate_priority(&score, &signals);
+        assessment.set_score_and_priority(score.clone(), signals.clone(), priority.clone());
 
-        let passed = passes_threshold(&breakdown);
-        assessment.set_threshold_result(passed, breakdown.final_priority);
+        let passed = score.passes_threshold();
+        assessment.set_threshold_result(passed);
         assessment.print();
 
         if passed {
@@ -153,14 +154,14 @@ pub async fn run_backfill(pool: DbPool, ml_handle: &MLHandle) {
                 uri: post.uri.clone(),
                 text: text.clone(),
                 timestamp,
-                final_score: breakdown.final_priority,
-                priority: breakdown.final_priority,
-                confidence: breakdown.confidence.to_string(),
-                post_type: breakdown.topic_label.clone(),
+                final_score: score.final_score,
+                priority: priority.final_priority,
+                confidence: priority.confidence.to_string(),
+                post_type: priority.topic_label.clone(),
                 keyword_score: if found_keywords { 1.0 } else { 0.0 },
                 hashtag_score: if found_hashtags { 1.0 } else { 0.0 },
-                semantic_score: ml_scores.semantic_score,
-                classification_score: ml_scores.classification_score,
+                semantic_score: score.semantic_score,
+                classification_score: score.classification_score,
                 has_media: if media_info.image_count > 0 || media_info.has_video {
                     1
                 } else {
@@ -211,6 +212,8 @@ fn extract_media_from_embed(embed: &Option<serde_json::Value>) -> MediaInfo {
             image_count: 0,
             has_video: true,
             has_alt_text: false,
+            external_uri: None,
+            facet_links: Vec::new(),
         },
         "app.bsky.embed.images#view" => {
             let images = embed.get("images").and_then(|i| i.as_array());
@@ -229,6 +232,22 @@ fn extract_media_from_embed(embed: &Option<serde_json::Value>) -> MediaInfo {
                 image_count: count,
                 has_video: false,
                 has_alt_text: has_alt,
+                external_uri: None,
+                facet_links: Vec::new(),
+            }
+        }
+        "app.bsky.embed.external#view" => {
+            let uri = embed
+                .get("external")
+                .and_then(|e| e.get("uri"))
+                .and_then(|u| u.as_str())
+                .map(|s| s.to_string());
+            MediaInfo {
+                image_count: 0,
+                has_video: false,
+                has_alt_text: false,
+                external_uri: uri,
+                facet_links: Vec::new(),
             }
         }
         "app.bsky.embed.recordWithMedia#view" => {
@@ -239,6 +258,8 @@ fn extract_media_from_embed(embed: &Option<serde_json::Value>) -> MediaInfo {
                         image_count: 0,
                         has_video: true,
                         has_alt_text: false,
+                        external_uri: None,
+                        facet_links: Vec::new(),
                     },
                     "app.bsky.embed.images#view" => {
                         let images = media.get("images").and_then(|i| i.as_array());
@@ -257,6 +278,22 @@ fn extract_media_from_embed(embed: &Option<serde_json::Value>) -> MediaInfo {
                             image_count: count,
                             has_video: false,
                             has_alt_text: has_alt,
+                            external_uri: None,
+                            facet_links: Vec::new(),
+                        }
+                    }
+                    "app.bsky.embed.external#view" => {
+                        let uri = media
+                            .get("external")
+                            .and_then(|e| e.get("uri"))
+                            .and_then(|u| u.as_str())
+                            .map(|s| s.to_string());
+                        MediaInfo {
+                            image_count: 0,
+                            has_video: false,
+                            has_alt_text: false,
+                            external_uri: uri,
+                            facet_links: Vec::new(),
                         }
                     }
                     _ => MediaInfo::default(),

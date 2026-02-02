@@ -3,30 +3,26 @@ pub mod content;
 pub mod filters;
 pub mod priority;
 mod relevance;
+pub mod score;
 mod semantic;
 
-pub use classification::{
-    label_multiplier, ClassificationLabel, MLHandle, MLScores, QualityAssessment,
-    TopicClassification, TopicLabel, ML_BATCH_SIZE, ML_BATCH_TIMEOUT_MS, WEIGHT_CLASSIFICATION,
-};
-pub use content::{
-    count_links, detect_first_person, extract_content_signals, is_first_person, ContentSignals,
-    MediaInfo,
-};
-pub use filters::{apply_filters, apply_ml_filter, Filter, FilterResult, MIN_TEXT_LENGTH};
+pub use classification::{label_multiplier, MLHandle, MLScores};
+pub use content::{extract_content_signals, ContentSignals, MediaInfo};
+pub use filters::{apply_filters, apply_ml_filter, Filter, FilterResult};
 pub use priority::{
-    calculate_priority, passes_threshold, ConfidenceTier, PriorityBreakdown, PrioritySignals,
+    calculate_priority, PriorityBreakdown, PrioritySignals, BONUS_FIRST_PERSON,
+    BONUS_IMAGE_WITH_ALT, BONUS_VIDEO, MANY_IMAGES_THRESHOLD, PENALTY_MANY_IMAGES,
+    PENALTY_PROMO_LINK, QUALITY_THRESHOLD,
 };
-pub use relevance::{
-    has_hashtags, has_keywords, strip_hashtags, GAMEDEV_HASHTAGS, GAMEDEV_KEYWORDS,
-};
-pub use semantic::REFERENCE_POSTS;
+pub use relevance::{has_hashtags, has_keywords};
+pub use score::{calculate_score, ScoreBreakdown, SCORE_THRESHOLD};
 
 use chrono::{DateTime, Utc};
 
 pub struct EvaluationResult {
     pub passes: bool,
-    pub breakdown: Option<PriorityBreakdown>,
+    pub score: Option<ScoreBreakdown>,
+    pub priority: Option<PriorityBreakdown>,
 }
 
 impl EvaluationResult {
@@ -40,7 +36,8 @@ pub async fn evaluate_post(text: &str, media: MediaInfo, ml_handle: &MLHandle) -
     if let FilterResult::Reject(_) = &filter_result {
         return EvaluationResult {
             passes: false,
-            breakdown: None,
+            score: None,
+            priority: None,
         };
     }
 
@@ -49,33 +46,35 @@ pub async fn evaluate_post(text: &str, media: MediaInfo, ml_handle: &MLHandle) -
     if !found_keywords && !found_hashtags {
         return EvaluationResult {
             passes: false,
-            breakdown: None,
+            score: None,
+            priority: None,
         };
     }
 
-    let scores = ml_handle.score(text.to_string()).await;
+    let ml_scores = ml_handle.score(text.to_string()).await;
 
     let ml_filter_result = apply_ml_filter(
-        &scores.best_label,
-        scores.best_label_score,
-        scores.is_negative_label,
+        &ml_scores.best_label,
+        ml_scores.best_label_score,
+        ml_scores.is_negative_label,
     );
     if let FilterResult::Reject(_) = ml_filter_result {
         return EvaluationResult {
             passes: false,
-            breakdown: None,
+            score: None,
+            priority: None,
         };
     }
 
     let content = extract_content_signals(text, &media);
 
+    let score = calculate_score(ml_scores.classification_score, ml_scores.semantic_score);
+
     let signals = PrioritySignals {
-        topic_classification_score: scores.classification_score,
-        semantic_score: scores.semantic_score,
-        topic_label: scores.best_label.clone(),
-        label_multiplier: label_multiplier(&scores.best_label),
-        engagement_bait_score: scores.quality.engagement_bait_score,
-        synthetic_score: scores.quality.synthetic_score,
+        topic_label: ml_scores.best_label.clone(),
+        label_multiplier: label_multiplier(&ml_scores.best_label),
+        engagement_bait_score: ml_scores.quality.engagement_bait_score,
+        synthetic_score: ml_scores.quality.synthetic_score,
         is_first_person: content.is_first_person,
         images: content.images,
         has_video: content.has_video,
@@ -88,12 +87,13 @@ pub async fn evaluate_post(text: &str, media: MediaInfo, ml_handle: &MLHandle) -
         like_count: 0,
     };
 
-    let breakdown = calculate_priority(&signals);
-    let passes = passes_threshold(&breakdown);
+    let priority = calculate_priority(&score, &signals);
+    let passes = score.passes_threshold();
 
     EvaluationResult {
         passes,
-        breakdown: Some(breakdown),
+        score: Some(score),
+        priority: Some(priority),
     }
 }
 
@@ -137,17 +137,16 @@ mod tests {
 
     #[test]
     fn test_bonus_video() {
+        let score = calculate_score(0.5, 0.5);
         let mut signals = PrioritySignals {
-            topic_classification_score: 0.5,
-            semantic_score: 0.5,
             label_multiplier: 1.0,
             ..Default::default()
         };
 
-        let breakdown_no_video = calculate_priority(&signals);
+        let breakdown_no_video = calculate_priority(&score, &signals);
 
         signals.has_video = true;
-        let breakdown_with_video = calculate_priority(&signals);
+        let breakdown_with_video = calculate_priority(&score, &signals);
 
         assert!(breakdown_with_video.final_priority > breakdown_no_video.final_priority);
         assert!(breakdown_with_video
@@ -158,18 +157,17 @@ mod tests {
 
     #[test]
     fn test_penalty_many_images() {
+        let score = calculate_score(0.5, 0.5);
         let mut signals = PrioritySignals {
-            topic_classification_score: 0.5,
-            semantic_score: 0.5,
             label_multiplier: 1.0,
             images: 2,
             ..Default::default()
         };
 
-        let breakdown_few_images = calculate_priority(&signals);
+        let breakdown_few_images = calculate_priority(&score, &signals);
 
         signals.images = 3;
-        let breakdown_many_images = calculate_priority(&signals);
+        let breakdown_many_images = calculate_priority(&score, &signals);
 
         assert!(breakdown_many_images.final_priority < breakdown_few_images.final_priority);
         assert!(breakdown_many_images

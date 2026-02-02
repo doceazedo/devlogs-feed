@@ -23,6 +23,21 @@ struct PostRecord {
 #[derive(Debug, Deserialize)]
 struct PostContent {
     text: String,
+    facets: Option<Vec<Facet>>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Facet {
+    pub features: Vec<FacetFeature>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "$type")]
+pub enum FacetFeature {
+    #[serde(rename = "app.bsky.richtext.facet#link")]
+    Link { uri: String },
+    #[serde(other)]
+    Other,
 }
 
 #[derive(Debug, Clone)]
@@ -31,6 +46,8 @@ pub struct FetchedPost {
     pub has_media: bool,
     pub has_video: bool,
     pub image_count: usize,
+    pub external_uri: Option<String>,
+    pub facet_links: Vec<String>,
 }
 
 pub fn parse_bluesky_url(input: &str) -> Option<String> {
@@ -76,55 +93,91 @@ pub async fn fetch_post(at_uri: &str) -> Result<FetchedPost, String> {
         .await
         .map_err(|e| format!("Failed to parse response: {}", e))?;
 
-    let (has_media, has_video, image_count) = extract_media_info(&thread.thread.post.embed);
+    let (has_media, has_video, image_count, external_uri) =
+        extract_media_info(&thread.thread.post.embed);
+
+    let facet_links = extract_facet_links(&thread.thread.post.record.facets);
 
     Ok(FetchedPost {
         text: thread.thread.post.record.text,
         has_media,
         has_video,
         image_count,
+        external_uri,
+        facet_links,
     })
 }
 
-fn extract_media_info(embed: &Option<serde_json::Value>) -> (bool, bool, usize) {
+fn extract_media_info(embed: &Option<serde_json::Value>) -> (bool, bool, usize, Option<String>) {
     let Some(embed) = embed else {
-        return (false, false, 0);
+        return (false, false, 0, None);
     };
 
     let embed_type = embed.get("$type").and_then(|t| t.as_str()).unwrap_or("");
 
     match embed_type {
-        "app.bsky.embed.video#view" => (true, true, 0),
+        "app.bsky.embed.video#view" => (true, true, 0, None),
         "app.bsky.embed.images#view" => {
             let count = embed
                 .get("images")
                 .and_then(|i| i.as_array())
                 .map(|arr| arr.len())
                 .unwrap_or(0);
-            (count > 0, false, count)
+            (count > 0, false, count, None)
+        }
+        "app.bsky.embed.external#view" => {
+            let uri = embed
+                .get("external")
+                .and_then(|e| e.get("uri"))
+                .and_then(|u| u.as_str())
+                .map(|s| s.to_string());
+            (false, false, 0, uri)
         }
         "app.bsky.embed.recordWithMedia#view" => {
             let media = embed.get("media");
             if let Some(media) = media {
                 let media_type = media.get("$type").and_then(|t| t.as_str()).unwrap_or("");
                 match media_type {
-                    "app.bsky.embed.video#view" => (true, true, 0),
+                    "app.bsky.embed.video#view" => (true, true, 0, None),
                     "app.bsky.embed.images#view" => {
                         let count = media
                             .get("images")
                             .and_then(|i| i.as_array())
                             .map(|arr| arr.len())
                             .unwrap_or(0);
-                        (count > 0, false, count)
+                        (count > 0, false, count, None)
                     }
-                    _ => (false, false, 0),
+                    "app.bsky.embed.external#view" => {
+                        let uri = media
+                            .get("external")
+                            .and_then(|e| e.get("uri"))
+                            .and_then(|u| u.as_str())
+                            .map(|s| s.to_string());
+                        (false, false, 0, uri)
+                    }
+                    _ => (false, false, 0, None),
                 }
             } else {
-                (false, false, 0)
+                (false, false, 0, None)
             }
         }
-        _ => (false, false, 0),
+        _ => (false, false, 0, None),
     }
+}
+
+pub fn extract_facet_links(facets: &Option<Vec<Facet>>) -> Vec<String> {
+    let Some(facets) = facets else {
+        return Vec::new();
+    };
+
+    facets
+        .iter()
+        .flat_map(|f| &f.features)
+        .filter_map(|feature| match feature {
+            FacetFeature::Link { uri } => Some(uri.clone()),
+            FacetFeature::Other => None,
+        })
+        .collect()
 }
 
 #[derive(Debug, Serialize)]
@@ -163,6 +216,7 @@ pub struct SearchAuthor {
 pub struct SearchRecord {
     pub text: String,
     pub langs: Option<Vec<String>>,
+    pub facets: Option<Vec<Facet>>,
 }
 
 pub async fn create_session(client: &reqwest::Client) -> Result<String, String> {

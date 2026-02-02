@@ -1,7 +1,9 @@
 use console::{measure_text_width, Style};
 
+use crate::scoring::score::{WEIGHT_CLASSIFICATION, WEIGHT_SEMANTIC};
 use crate::scoring::{
     ContentSignals, Filter, FilterResult, MLScores, MediaInfo, PriorityBreakdown, PrioritySignals,
+    ScoreBreakdown, QUALITY_THRESHOLD, SCORE_THRESHOLD,
 };
 
 pub const TREE_BRANCH: char = '\u{251C}';
@@ -10,7 +12,7 @@ pub const TREE_HORIZ: char = '\u{2500}';
 pub const TREE_VERT: char = '\u{2502}';
 
 const TREE_PREFIX_WIDTH: usize = 4;
-const VALUE_COLUMN: usize = 20;
+const VALUE_COLUMN: usize = 25;
 
 fn tree_branch() -> String {
     dim()
@@ -28,7 +30,7 @@ fn tree_indent() -> String {
     dim().apply_to(format!("{}   ", TREE_VERT)).to_string()
 }
 
-fn dim() -> Style {
+pub fn dim() -> Style {
     Style::new().dim()
 }
 
@@ -72,7 +74,7 @@ fn ml_prefix() -> String {
     yellow().apply_to("[ML]").to_string()
 }
 
-fn pad_label(label: &str, depth: usize) -> String {
+pub fn pad_label(label: &str, depth: usize) -> String {
     let prefix_width = depth * TREE_PREFIX_WIDTH;
     let target_width = VALUE_COLUMN.saturating_sub(prefix_width);
     let current_width = measure_text_width(label);
@@ -83,7 +85,7 @@ fn pad_label(label: &str, depth: usize) -> String {
     }
 }
 
-fn format_signed(value: f32) -> String {
+pub fn format_signed(value: f32) -> String {
     let sign = if value >= 0.0 { "+" } else { "-" };
     format!("{}{:.2}", dim().apply_to(sign), value.abs())
 }
@@ -247,8 +249,9 @@ pub struct PostAssessment {
     pub ml_scores: Option<MLScores>,
     pub content_signals: Option<ContentSignals>,
     pub media_info: Option<MediaInfo>,
+    pub score: Option<ScoreBreakdown>,
     pub signals: Option<PrioritySignals>,
-    pub breakdown: Option<PriorityBreakdown>,
+    pub priority: Option<PriorityBreakdown>,
     pub result: Option<AssessmentResult>,
 }
 
@@ -292,17 +295,24 @@ impl PostAssessment {
         self.media_info = Some(media);
     }
 
-    pub fn set_priority(&mut self, signals: PrioritySignals, breakdown: PriorityBreakdown) {
+    pub fn set_score_and_priority(
+        &mut self,
+        score: ScoreBreakdown,
+        signals: PrioritySignals,
+        priority: PriorityBreakdown,
+    ) {
+        self.score = Some(score);
         self.signals = Some(signals);
-        self.breakdown = Some(breakdown);
+        self.priority = Some(priority);
     }
 
-    pub fn set_threshold_result(&mut self, passed: bool, priority: f32) {
+    pub fn set_threshold_result(&mut self, passed: bool) {
         if self.result.is_none() {
+            let final_score = self.score.as_ref().map(|s| s.final_score).unwrap_or(0.0);
             self.result = Some(if passed {
-                AssessmentResult::Accepted(priority)
+                AssessmentResult::Accepted(final_score)
             } else {
-                AssessmentResult::BelowThreshold(priority)
+                AssessmentResult::BelowThreshold(final_score)
             });
         }
     }
@@ -375,12 +385,12 @@ impl PostAssessment {
             ));
 
             let quality = &ml.quality;
-            let bait_style = if quality.engagement_bait_score > 0.5 {
+            let bait_style = if quality.engagement_bait_score > QUALITY_THRESHOLD {
                 yellow()
             } else {
                 dim()
             };
-            let synth_style = if quality.synthetic_score > 0.5 {
+            let synth_style = if quality.synthetic_score > QUALITY_THRESHOLD {
                 yellow()
             } else {
                 dim()
@@ -400,206 +410,121 @@ impl PostAssessment {
             ));
         }
 
-        if let Some(ref breakdown) = self.breakdown {
+        if let (Some(ref score), Some(ref priority)) = (&self.score, &self.priority) {
             lines.push(String::new());
-            lines.push(format!("{}", bold().apply_to("priority")));
-
-            let mut boosts: Vec<String> = Vec::new();
-            let mut penalties: Vec<String> = Vec::new();
-
-            if let Some(ref content) = self.content_signals {
-                if content.is_first_person {
-                    boosts.push(format!(
-                        "{}{}{}",
-                        pad_label("first-person", 2),
-                        dim().apply_to("+"),
-                        green().apply_to("10%")
-                    ));
-                }
-                if content.has_video {
-                    boosts.push(format!(
-                        "{}{}{}",
-                        pad_label("video", 2),
-                        dim().apply_to("+"),
-                        green().apply_to("10%")
-                    ));
-                }
-                if content.images > 0 && content.has_alt_text {
-                    boosts.push(format!(
-                        "{}{}{}",
-                        pad_label("alt-text", 2),
-                        dim().apply_to("+"),
-                        green().apply_to("5%")
-                    ));
-                }
-                if content.images >= 3 {
-                    penalties.push(format!(
-                        "{}{}{} {}",
-                        pad_label("images", 2),
-                        dim().apply_to("-"),
-                        yellow().apply_to("10%"),
-                        dim().apply_to(format!("({})", content.images))
-                    ));
-                }
-                if content.link_count > 0 {
-                    let penalty = content.link_count as f32 * 3.0;
-                    penalties.push(format!(
-                        "{}{}{} {}",
-                        pad_label("links", 2),
-                        dim().apply_to("-"),
-                        yellow().apply_to(format!("{:.0}%", penalty)),
-                        dim().apply_to(format!("({})", content.link_count))
-                    ));
-                }
-                if content.promo_link_count > 0 {
-                    let penalty = content.promo_link_count as f32 * 8.0;
-                    penalties.push(format!(
-                        "{}{}{} {}",
-                        pad_label("promo-links", 2),
-                        dim().apply_to("-"),
-                        yellow().apply_to(format!("{:.0}%", penalty)),
-                        dim().apply_to(format!("({})", content.promo_link_count))
-                    ));
-                }
-            }
-
-            for boost in &breakdown.boost_reasons {
-                if !boost.contains("first-person")
-                    && !boost.contains("video")
-                    && !boost.contains("image-with-alt")
-                {
-                    boosts.push(format!("{}", green().apply_to(boost)));
-                }
-            }
-
-            for penalty in &breakdown.penalty_reasons {
-                if !penalty.contains("images")
-                    && !penalty.contains("links")
-                    && !penalty.contains("promo")
-                {
-                    penalties.push(format!("{}", yellow().apply_to(penalty)));
-                }
-            }
-
-            lines.push(format!("{}{}", tree_branch(), pad_label("boosts", 1)));
-            if boosts.is_empty() {
-                lines.push(format!(
-                    "{}{}{}",
-                    tree_indent(),
-                    tree_end(),
-                    dim().apply_to("none")
-                ));
-            } else {
-                let boost_count = boosts.len();
-                for (i, boost) in boosts.iter().enumerate() {
-                    let boost_branch = if i == boost_count - 1 {
-                        tree_end()
-                    } else {
-                        tree_branch()
-                    };
-                    lines.push(format!("{}{}{}", tree_indent(), boost_branch, boost));
-                }
-            }
-
-            lines.push(format!("{}{}", tree_branch(), pad_label("penalties", 1)));
-            if penalties.is_empty() {
-                lines.push(format!(
-                    "{}{}{}",
-                    tree_indent(),
-                    tree_end(),
-                    dim().apply_to("none")
-                ));
-            } else {
-                let penalty_count = penalties.len();
-                for (i, penalty) in penalties.iter().enumerate() {
-                    let penalty_branch = if i == penalty_count - 1 {
-                        tree_end()
-                    } else {
-                        tree_branch()
-                    };
-                    lines.push(format!("{}{}{}", tree_indent(), penalty_branch, penalty));
-                }
-            }
-
-            lines.push(format!("{}{}", tree_branch(), pad_label("scores", 1)));
+            lines.push(format!("{}", bold().apply_to("score")));
             lines.push(format!(
-                "{}{}{} {:.2}",
-                tree_indent(),
+                "{}{} {:.0}% {}",
                 tree_branch(),
-                pad_label("topic", 2),
-                breakdown.topic_score
+                pad_label("classification", 1),
+                score.classification_score * 100.0,
+                dim().apply_to(format!("(x{:.0})", WEIGHT_CLASSIFICATION))
             ));
             lines.push(format!(
-                "{}{}{} {:.2}",
-                tree_indent(),
+                "{}{} {:.0}% {}",
                 tree_branch(),
-                pad_label("semantic", 2),
-                self.signals
-                    .as_ref()
-                    .map(|s| s.semantic_score)
-                    .unwrap_or(0.0)
+                pad_label("semantic", 1),
+                score.semantic_score * 100.0,
+                dim().apply_to(format!("(x{:.0})", WEIGHT_SEMANTIC))
             ));
-            lines.push(format!(
-                "{}{}{}{}",
-                tree_indent(),
-                tree_branch(),
-                pad_label("content", 2),
-                format_signed(breakdown.content_modifier)
-            ));
-            lines.push(format!(
-                "{}{}{} {:.2}",
-                tree_indent(),
-                tree_branch(),
-                pad_label("quality", 2),
-                breakdown.quality_penalty
-            ));
-            lines.push(format!(
-                "{}{}{}{}",
-                tree_indent(),
-                tree_branch(),
-                pad_label("engagement", 2),
-                format_signed(breakdown.engagement_boost)
-            ));
-            lines.push(format!(
-                "{}{}{}{}",
-                tree_indent(),
-                tree_end(),
-                pad_label("label", 2),
-                format_signed(breakdown.label_boost)
-            ));
-
-            let final_style = if breakdown.final_priority < 1.0 {
-                yellow()
-            } else {
-                green()
-            };
-
-            lines.push(format!(
-                "{}{} {}",
-                tree_end(),
-                pad_label("final priority", 1),
-                final_style.apply_to(format!("{:.2}", breakdown.final_priority))
-            ));
-
-            lines.push(String::new());
-            lines.push(format!("{}", bold().apply_to("result")));
-
-            let threshold_style = if breakdown.final_priority >= 0.5 {
+            let threshold_style = if score.final_score >= SCORE_THRESHOLD {
                 green().dim()
             } else {
                 red().dim()
             };
             let score_str = format!(
-                "{:.2} {}",
-                breakdown.final_priority,
-                threshold_style.apply_to(if breakdown.final_priority >= 0.5 {
-                    "(>=0.5)"
+                "{} {}",
+                bold().apply_to(format!("{:.2}", score.final_score)),
+                threshold_style.apply_to(if score.final_score >= SCORE_THRESHOLD {
+                    format!("(>={})", SCORE_THRESHOLD)
                 } else {
-                    "(<0.5)"
+                    format!("(<{})", SCORE_THRESHOLD)
                 })
             );
+            lines.push(format!(
+                "{}{} {}",
+                tree_end(),
+                pad_label("total", 1),
+                score_str
+            ));
 
-            let conf_str = breakdown.confidence.to_string().to_lowercase();
+            lines.push(String::new());
+            lines.push(format!("{}", bold().apply_to("priority")));
+
+            lines.push(format!("{}{}", tree_branch(), pad_label("boosts", 1)));
+            if priority.boost_reasons.is_empty() {
+                lines.push(format!(
+                    "{}{}{}",
+                    tree_indent(),
+                    tree_end(),
+                    dim().apply_to("none")
+                ));
+            } else {
+                let count = priority.boost_reasons.len();
+                for (i, boost) in priority.boost_reasons.iter().enumerate() {
+                    let branch = if i == count - 1 {
+                        tree_end()
+                    } else {
+                        tree_branch()
+                    };
+                    lines.push(format!("{}{}{}", tree_indent(), branch, boost));
+                }
+            }
+
+            lines.push(format!("{}{}", tree_branch(), pad_label("penalties", 1)));
+            if priority.penalty_reasons.is_empty() {
+                lines.push(format!(
+                    "{}{}{}",
+                    tree_indent(),
+                    tree_end(),
+                    dim().apply_to("none")
+                ));
+            } else {
+                let count = priority.penalty_reasons.len();
+                for (i, penalty) in priority.penalty_reasons.iter().enumerate() {
+                    let branch = if i == count - 1 {
+                        tree_end()
+                    } else {
+                        tree_branch()
+                    };
+                    lines.push(format!("{}{}{}", tree_indent(), branch, penalty));
+                }
+            }
+
+            let total_boosts = priority.content_modifier.max(0.0)
+                + priority.engagement_boost
+                + priority.label_boost.max(0.0);
+            let total_penalties = priority.quality_penalty
+                + priority.content_modifier.min(0.0).abs()
+                + priority.label_boost.min(0.0).abs();
+
+            lines.push(format!("{}{}", tree_branch(), pad_label("modifiers", 1)));
+            lines.push(format!(
+                "{}{}{}{}",
+                tree_indent(),
+                tree_branch(),
+                pad_label("boosts", 2),
+                format_signed(total_boosts)
+            ));
+            lines.push(format!(
+                "{}{}{}{}",
+                tree_indent(),
+                tree_end(),
+                pad_label("penalties", 2),
+                format_signed(-total_penalties)
+            ));
+
+            lines.push(format!(
+                "{}{}{}",
+                tree_end(),
+                pad_label("total", 1),
+                format_signed(priority.final_priority),
+            ));
+
+            lines.push(String::new());
+            lines.push(format!("{}", bold().apply_to("result")));
+
+            let conf_str = priority.confidence.to_string().to_lowercase();
             let conf_desc = match conf_str.as_str() {
                 "strong" => "[strong] definitely gamedev",
                 "high" => "[high] likely gamedev",
@@ -625,6 +550,12 @@ impl PostAssessment {
                 tree_branch(),
                 pad_label("score", 1),
                 score_str
+            ));
+            lines.push(format!(
+                "{}{}{}",
+                tree_branch(),
+                pad_label("priority", 1),
+                format_signed(priority.final_priority),
             ));
             lines.push(format!(
                 "{}{} {}",
@@ -656,7 +587,7 @@ impl PostAssessment {
                     format!("ml classification ({})", label)
                 }
                 Some(AssessmentResult::BelowThreshold(p)) => {
-                    format!("below threshold ({:.2} < 0.50)", p)
+                    format!("below threshold ({:.2} < {})", p, SCORE_THRESHOLD)
                 }
                 _ => "unknown".into(),
             };

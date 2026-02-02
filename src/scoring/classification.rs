@@ -8,7 +8,6 @@ use strum::{Display, EnumIter, IntoEnumIterator, IntoStaticStr};
 
 use super::semantic::{compute_reference_embeddings, semantic_similarity_batch};
 
-pub const WEIGHT_CLASSIFICATION: f32 = 0.50;
 pub const ML_BATCH_SIZE: usize = 16;
 pub const ML_BATCH_TIMEOUT_MS: u64 = 10;
 
@@ -18,10 +17,6 @@ pub enum TopicLabel {
     GameDevSharingWork,
     #[strum(to_string = "game programming or technical development")]
     GameProgramming,
-    #[strum(to_string = "gamer discussing games they play")]
-    GamerDiscussing,
-    #[strum(to_string = "game review or gameplay opinion")]
-    GameReview,
     #[strum(to_string = "marketing or promotional content")]
     Marketing,
     #[strum(to_string = "job posting or job search")]
@@ -41,15 +36,13 @@ impl TopicLabel {
 
     pub fn multiplier(&self) -> f32 {
         match self {
-            Self::GameDevSharingWork => 2.0,
-            Self::GameProgramming => 1.2,
-            Self::GamerDiscussing => 0.8,
-            Self::GameReview => 0.6,
-            Self::Marketing => 0.2,
-            Self::JobPosting => 0.2,
+            Self::GameDevSharingWork => 4.0,
+            Self::GameProgramming => 2.0,
+            Self::Marketing => 0.0,
+            Self::JobPosting => 0.0,
             Self::GenAi => 0.0,
             Self::CryptoNFT => 0.0,
-            Self::Unrelated => 0.2,
+            Self::Unrelated => 0.0,
         }
     }
 
@@ -321,5 +314,3 @@ fn assess_quality_batch(
         Err(_) => vec![QualityAssessment::default(); texts.len()],
     }
 }
-
-pub use TopicLabel as ClassificationLabel;

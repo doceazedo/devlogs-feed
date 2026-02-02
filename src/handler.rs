@@ -1,8 +1,8 @@
 use crate::db::{self, DbPool, NewLike, NewPost};
 use crate::engagement::EngagementTracker;
 use crate::scoring::{
-    apply_filters, apply_ml_filter, apply_time_decay, calculate_priority, extract_content_signals,
-    has_hashtags, has_keywords, label_multiplier, passes_threshold, FilterResult, MLHandle,
+    apply_filters, apply_ml_filter, apply_time_decay, calculate_priority, calculate_score,
+    extract_content_signals, has_hashtags, has_keywords, label_multiplier, FilterResult, MLHandle,
     MediaInfo, PrioritySignals,
 };
 use crate::utils::logs::{self, PostAssessment};
@@ -48,21 +48,43 @@ impl GameDevFeedHandler {
                 image_count: images.len().min(255) as u8,
                 has_video: false,
                 has_alt_text: images.iter().any(|img| !img.alt_text.is_empty()),
+                external_uri: None,
+                facet_links: Vec::new(),
             },
             Some(Embed::Video(_)) => MediaInfo {
                 image_count: 0,
                 has_video: true,
                 has_alt_text: false,
+                external_uri: None,
+                facet_links: Vec::new(),
+            },
+            Some(Embed::External(external)) => MediaInfo {
+                image_count: 0,
+                has_video: false,
+                has_alt_text: false,
+                external_uri: Some(external.uri.clone()),
+                facet_links: Vec::new(),
             },
             Some(Embed::QuoteWithMedia(_, skyfeed::MediaEmbed::Images(images))) => MediaInfo {
                 image_count: images.len().min(255) as u8,
                 has_video: false,
                 has_alt_text: images.iter().any(|img| !img.alt_text.is_empty()),
+                external_uri: None,
+                facet_links: Vec::new(),
             },
             Some(Embed::QuoteWithMedia(_, skyfeed::MediaEmbed::Video(_))) => MediaInfo {
                 image_count: 0,
                 has_video: true,
                 has_alt_text: false,
+                external_uri: None,
+                facet_links: Vec::new(),
+            },
+            Some(Embed::QuoteWithMedia(_, skyfeed::MediaEmbed::External(external))) => MediaInfo {
+                image_count: 0,
+                has_video: false,
+                has_alt_text: false,
+                external_uri: Some(external.uri.clone()),
+                facet_links: Vec::new(),
             },
             _ => MediaInfo::default(),
         }
@@ -179,9 +201,9 @@ impl FeedHandler for GameDevFeedHandler {
         let content = extract_content_signals(text, &media_info);
         assessment.set_content(content.clone(), media_info.clone());
 
+        let score = calculate_score(ml_scores.classification_score, ml_scores.semantic_score);
+
         let signals = PrioritySignals {
-            topic_classification_score: ml_scores.classification_score,
-            semantic_score: ml_scores.semantic_score,
             topic_label: ml_scores.best_label.clone(),
             label_multiplier: label_multiplier(&ml_scores.best_label),
             engagement_bait_score: ml_scores.quality.engagement_bait_score,
@@ -198,11 +220,11 @@ impl FeedHandler for GameDevFeedHandler {
             like_count: 0,
         };
 
-        let breakdown = calculate_priority(&signals);
-        assessment.set_priority(signals.clone(), breakdown.clone());
+        let priority = calculate_priority(&score, &signals);
+        assessment.set_score_and_priority(score.clone(), signals.clone(), priority.clone());
 
-        let passed = passes_threshold(&breakdown);
-        assessment.set_threshold_result(passed, breakdown.final_priority);
+        let passed = score.passes_threshold();
+        assessment.set_threshold_result(passed);
         assessment.print();
 
         if passed {
@@ -210,14 +232,14 @@ impl FeedHandler for GameDevFeedHandler {
                 uri: post.uri.0.clone(),
                 text: text.clone(),
                 timestamp: post.timestamp.timestamp(),
-                final_score: breakdown.final_priority,
-                priority: breakdown.final_priority,
-                confidence: breakdown.confidence.to_string(),
-                post_type: breakdown.topic_label.clone(),
+                final_score: score.final_score,
+                priority: priority.final_priority,
+                confidence: priority.confidence.to_string(),
+                post_type: priority.topic_label.clone(),
                 keyword_score: if found_keywords { 1.0 } else { 0.0 },
                 hashtag_score: if found_hashtags { 1.0 } else { 0.0 },
-                semantic_score: ml_scores.semantic_score,
-                classification_score: ml_scores.classification_score,
+                semantic_score: score.semantic_score,
+                classification_score: score.classification_score,
                 has_media: if media_info.image_count > 0 || media_info.has_video {
                     1
                 } else {
