@@ -4,10 +4,7 @@ use crate::scoring::{
     has_keywords, label_multiplier, passes_threshold, FilterResult, MLHandle, MediaInfo,
     PrioritySignals,
 };
-use crate::utils::{
-    log_backfill_done, log_backfill_error, log_backfill_progress, log_backfill_skipped,
-    log_backfill_start,
-};
+use crate::utils::logs::{self, PostAssessment};
 use chrono::Utc;
 use serde::Deserialize;
 
@@ -43,7 +40,7 @@ struct SearchRecord {
 }
 
 pub async fn run_backfill(pool: DbPool, ml_handle: &MLHandle) {
-    log_backfill_start();
+    logs::log_backfill_start();
 
     let search_queries = vec![
         "#gamedev",
@@ -58,13 +55,9 @@ pub async fn run_backfill(pool: DbPool, ml_handle: &MLHandle) {
     let client = reqwest::Client::new();
 
     for query in &search_queries {
-        match fetch_search_results(&client, query).await {
-            Ok(posts) => {
-                all_posts.extend(posts);
-            }
-            Err(e) => {
-                log_backfill_error(&format!("Search failed for '{}': {}", query, e));
-            }
+        if let Ok(posts) = fetch_search_results(&client, query).await {
+            logs::log_backfill_query(query, posts.len());
+            all_posts.extend(posts);
         }
 
         if all_posts.len() >= BACKFILL_LIMIT * 2 {
@@ -73,22 +66,18 @@ pub async fn run_backfill(pool: DbPool, ml_handle: &MLHandle) {
     }
 
     if all_posts.is_empty() {
-        log_backfill_skipped("No posts found from search");
+        logs::log_backfill_complete(0, 0);
         return;
     }
 
     let mut conn = match pool.get() {
         Ok(c) => c,
-        Err(e) => {
-            log_backfill_error(&format!("Failed to get DB connection: {}", e));
-            return;
-        }
+        Err(_) => return,
     };
 
     let cutoff = Utc::now().timestamp() - (BACKFILL_HOURS * 3600);
-    let mut scored = 0;
-    let mut accepted = 0;
     let mut new_posts: Vec<NewPost> = Vec::new();
+    let mut processed = 0;
 
     for post in all_posts.iter().take(BACKFILL_LIMIT * 2) {
         if db::post_exists(&mut conn, &post.uri) {
@@ -103,6 +92,8 @@ pub async fn run_backfill(pool: DbPool, ml_handle: &MLHandle) {
             continue;
         }
 
+        processed += 1;
+
         let text = &post.record.text;
         let lang = post
             .record
@@ -111,20 +102,23 @@ pub async fn run_backfill(pool: DbPool, ml_handle: &MLHandle) {
             .and_then(|l| l.first())
             .map(|s| s.as_str());
 
+        let mut assessment = PostAssessment::new(text);
+
         let filter_result = apply_filters(text, lang, Some(&post.author.did), |_| false);
+        assessment.set_filter_result(filter_result.clone());
         if matches!(filter_result, FilterResult::Reject(_)) {
             continue;
         }
 
         let (found_keywords, _) = has_keywords(text);
         let (found_hashtags, _) = has_hashtags(text);
+        assessment.set_relevance(found_keywords, found_hashtags);
         if !found_keywords && !found_hashtags {
             continue;
         }
 
-        scored += 1;
-
         let ml_scores = ml_handle.score(text.clone()).await;
+        assessment.set_ml_scores(ml_scores.clone());
 
         let ml_filter_result = apply_ml_filter(
             &ml_scores.best_label,
@@ -137,6 +131,7 @@ pub async fn run_backfill(pool: DbPool, ml_handle: &MLHandle) {
 
         let media_info = extract_media_from_embed(&post.embed);
         let content = extract_content_signals(text, &media_info);
+        assessment.set_content(content.clone(), media_info.clone());
 
         let signals = PrioritySignals {
             topic_classification_score: ml_scores.classification_score,
@@ -155,10 +150,13 @@ pub async fn run_backfill(pool: DbPool, ml_handle: &MLHandle) {
         };
 
         let breakdown = calculate_priority(&signals);
+        assessment.set_priority(signals.clone(), breakdown.clone());
 
-        if passes_threshold(&breakdown) {
-            accepted += 1;
+        let passed = passes_threshold(&breakdown);
+        assessment.set_threshold_result(passed, breakdown.final_priority);
+        assessment.print();
 
+        if passed {
             let new_post = NewPost {
                 uri: post.uri.clone(),
                 text: text.clone(),
@@ -190,22 +188,14 @@ pub async fn run_backfill(pool: DbPool, ml_handle: &MLHandle) {
                 break;
             }
         }
-
-        if scored % 20 == 0 {
-            log_backfill_progress(scored, scored, accepted);
-        }
     }
 
+    let accepted = new_posts.len();
     if !new_posts.is_empty() {
-        match db::insert_posts(&mut conn, new_posts) {
-            Ok(_) => {}
-            Err(e) => {
-                log_backfill_error(&format!("Failed to insert posts: {}", e));
-            }
-        }
+        let _ = db::insert_posts(&mut conn, new_posts);
     }
 
-    log_backfill_done(accepted);
+    logs::log_backfill_complete(accepted, processed);
 }
 
 async fn fetch_search_results(

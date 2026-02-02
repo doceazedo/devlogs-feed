@@ -1,595 +1,651 @@
+use console::{measure_text_width, Style};
+
 use crate::scoring::{
-    priority::{ConfidenceTier, PriorityBreakdown, BONUS_FIRST_PERSON, BONUS_VIDEO},
-    MLScores, REFERENCE_POSTS,
+    ContentSignals, Filter, FilterResult, MLScores, MediaInfo, PriorityBreakdown, PrioritySignals,
 };
-use colored::{ColoredString, Colorize};
 
-fn tree(last: bool) -> &'static str {
-    if last {
-        "└─"
+pub const TREE_BRANCH: char = '\u{251C}';
+pub const TREE_END: char = '\u{2514}';
+pub const TREE_HORIZ: char = '\u{2500}';
+pub const TREE_VERT: char = '\u{2502}';
+
+const TREE_PREFIX_WIDTH: usize = 4;
+const VALUE_COLUMN: usize = 20;
+
+fn tree_branch() -> String {
+    dim()
+        .apply_to(format!("{}{}{} ", TREE_BRANCH, TREE_HORIZ, TREE_HORIZ))
+        .to_string()
+}
+
+fn tree_end() -> String {
+    dim()
+        .apply_to(format!("{}{}{} ", TREE_END, TREE_HORIZ, TREE_HORIZ))
+        .to_string()
+}
+
+fn tree_indent() -> String {
+    dim().apply_to(format!("{}   ", TREE_VERT)).to_string()
+}
+
+fn dim() -> Style {
+    Style::new().dim()
+}
+
+fn blue() -> Style {
+    Style::new().blue()
+}
+
+fn magenta() -> Style {
+    Style::new().magenta()
+}
+
+fn cyan() -> Style {
+    Style::new().cyan()
+}
+
+fn green() -> Style {
+    Style::new().green()
+}
+
+fn red() -> Style {
+    Style::new().red()
+}
+
+fn yellow() -> Style {
+    Style::new().yellow()
+}
+
+fn bold() -> Style {
+    Style::new().bold()
+}
+
+fn pad_label(label: &str, depth: usize) -> String {
+    let prefix_width = depth * TREE_PREFIX_WIDTH;
+    let target_width = VALUE_COLUMN.saturating_sub(prefix_width);
+    let current_width = measure_text_width(label);
+    if current_width < target_width {
+        format!("{}{}", label, " ".repeat(target_width - current_width))
     } else {
-        "├─"
+        format!("{} ", label)
     }
 }
-fn yes_no(val: bool) -> ColoredString {
-    if val {
-        "yes".green()
-    } else {
-        "no".red()
-    }
+
+fn format_signed(value: f32) -> String {
+    let sign = if value >= 0.0 { "+" } else { "-" };
+    format!("{}{:.2}", dim().apply_to(sign), value.abs())
 }
-fn yes_no_opt(val: bool) -> ColoredString {
-    if val {
-        "yes".green()
-    } else {
-        "no".yellow()
-    }
-}
-fn pct(val: f32) -> String {
-    format!("{:.0}%", val * 100.0)
-}
-fn signed_pct(val: f32) -> ColoredString {
-    let s = format!("{:+.0}%", val * 100.0);
-    if val > 0.0 {
-        s.green()
-    } else if val < 0.0 {
-        s.yellow()
-    } else {
-        s.normal()
-    }
-}
-fn separator() {
+
+pub fn log_init(hostname: &str, port: u16, backfill_enabled: bool) {
     println!(
-        "{}",
-        "─────────────────────────────────────────────────────────".dimmed()
+        "{} devlogs feed on {}:{}",
+        green().apply_to("starting"),
+        cyan().apply_to(hostname),
+        cyan().apply_to(port)
+    );
+    println!(
+        "{}backfill: {}",
+        tree_end(),
+        if backfill_enabled {
+            green().apply_to("enabled")
+        } else {
+            dim().apply_to("disabled")
+        }
     );
 }
 
-pub fn truncate_text(text: &str, max: usize) -> &str {
-    text.char_indices()
-        .nth(max)
-        .map(|(i, _)| &text[..i])
-        .unwrap_or(text)
+pub fn log_ml_loading() {
+    println!("{} ml models...", blue().apply_to("loading"));
 }
 
-pub fn log_header(text: &str) {
-    println!("{}", text.bold());
-}
-pub fn log_newline() {
-    println!();
-}
-pub fn log_dimmed(message: &str) {
-    println!("  {}", message.dimmed());
-}
-
-pub fn log_startup_config(did: &str, host: &str, port: u16, db: &str, limit: usize) {
-    println!("{}", "Game Dev Progress Feed".green().bold());
-    println!("════════════════════════════════════════");
-    for (l, v) in [("DID", did), ("Hostname", host), ("Database", db)] {
-        println!("{} {}: {}", "[CONFIG]".cyan(), l, v);
-    }
-    println!(
-        "{} Port: {}\n{} Firehose limit: {}\n",
-        "[CONFIG]".cyan(),
-        port,
-        "[CONFIG]".cyan(),
-        limit
-    );
-}
-
-pub fn log_ml_step(message: &str) {
-    println!("{} {message}", "[ML]".yellow());
-}
-pub fn log_ml_loading(step: &str) {
-    log_ml_step(step);
-}
 pub fn log_ml_ready() {
-    println!("{} Ready to score posts!", "[ML]".green());
-}
-pub fn log_ml_error(message: &str) {
-    eprintln!("{} {message}", "[ML ERROR]".red());
-}
-pub fn log_ml_model_loaded(name: &str, secs: f32) {
-    println!(
-        "{} {name} loaded {}",
-        "[ML]".yellow(),
-        format!("({secs:.1}s)").dimmed()
-    );
-}
-pub fn log_ml_step_done(message: &str, detail: &str) {
-    println!(
-        "{} {message} {}",
-        "[ML]".yellow(),
-        format!("({detail})").dimmed()
-    );
+    println!("{} ml models ready", green().apply_to("loaded"));
 }
 
-pub fn log_db_status(message: &str) {
-    println!("{} {}", "[DB]".cyan(), message);
-}
-pub fn log_db_ready() {
-    println!("{} Connection pool ready", "[DB]".green());
-}
-pub fn log_db_error(message: &str) {
-    eprintln!("{} {}", "[DB ERROR]".red(), message);
-}
-pub fn log_cleanup_done(deleted: usize) {
-    println!("{} Cleaned up {} old posts", "[DB]".cyan(), deleted);
-}
-
-pub fn log_server_starting(port: u16) {
-    println!(
-        "\n{} Starting on port {}\n════════════════════════════════════════\n",
-        "[SERVER]".green(),
-        port.to_string().bold()
-    );
-}
-
-pub fn log_feed_served(count: usize, total: usize, shuffle_applied: bool) {
-    if count > 0 {
-        let shuffle_info = if shuffle_applied { " (shuffled)" } else { "" };
-        println!(
-            "{} Served {} posts (from {} total){}",
-            "[FEED]".blue(),
-            count,
-            total,
-            shuffle_info.dimmed()
-        );
-    }
-}
-pub fn log_feed_error(message: &str) {
-    eprintln!("{} {}", "[FEED]".blue(), message);
-}
-pub fn log_generic_error(tag: &str, message: &str) {
-    println!("{} {message}", tag.red());
-}
-
-pub fn log_filter_rejected(text: &str, filter: &crate::scoring::filters::Filter) {
-    let clean = text.replace('\n', " ");
-    let preview = truncate_text(&clean, 80);
-    println!(
-        "{} [{}] \"{}\"",
-        "FILTERED".red(),
-        filter.to_string().yellow(),
-        preview.dimmed()
-    );
-}
-
-pub fn log_ml_filter_rejected(text: &str, label: &str, confidence: f32) {
-    let clean = text.replace('\n', " ");
-    let preview = truncate_text(&clean, 80);
-    println!(
-        "{} [ml-rejection] \"{}\" {} {}",
-        "FILTERED".red(),
-        preview.dimmed(),
-        label.yellow(),
-        format!("({:.0}%)", confidence * 100.0).dimmed()
-    );
-}
-
-pub fn log_post_scored(text: &str, breakdown: &PriorityBreakdown) {
-    let clean = text.replace('\n', " ");
-    let preview = truncate_text(&clean, 80);
-
-    let confidence_color = match breakdown.confidence {
-        ConfidenceTier::Strong | ConfidenceTier::High => pct(breakdown.final_priority).green(),
-        ConfidenceTier::Moderate => pct(breakdown.final_priority).yellow(),
-        ConfidenceTier::Low => pct(breakdown.final_priority).red(),
+pub fn log_feed_served(count: usize, cursor: Option<&String>) {
+    let cursor_info = match cursor {
+        Some(c) => format!(" (cursor: {})", dim().apply_to(c)),
+        None => String::new(),
     };
-
     println!(
-        "{} [{}] \"{}\" {}",
-        "SCORED".cyan(),
-        breakdown.confidence.to_string().bold(),
-        preview.dimmed(),
-        confidence_color
-    );
-
-    if !breakdown.boost_reasons.is_empty() {
-        println!(
-            "  {} {}",
-            "Boosts:".green(),
-            breakdown.boost_reasons.join(", ")
-        );
-    }
-    if !breakdown.penalty_reasons.is_empty() {
-        println!(
-            "  {} {}",
-            "Penalties:".yellow(),
-            breakdown.penalty_reasons.join(", ")
-        );
-    }
-}
-
-pub fn log_engagement_recorded(post_uri: &str, event_type: &str) {
-    let uri_short: String = post_uri.chars().take(50).collect();
-    println!(
-        "{} {} on {}...",
-        "[ENGAGEMENT]".magenta(),
-        event_type,
-        uri_short.dimmed()
+        "{} {} posts{}",
+        cyan().apply_to("served"),
+        bold().apply_to(count),
+        cursor_info
     );
 }
 
-pub fn log_spammer_flagged(did: &str, reason: &str) {
-    println!(
-        "{} Flagged {} - {}",
-        "[SPAM]".red().bold(),
-        did.yellow(),
-        reason
-    );
+#[derive(Debug, Clone, Default)]
+pub struct BackfillProgress {
+    pub query: String,
+    pub fetched: usize,
+    pub processed: usize,
+    pub accepted: usize,
 }
 
 pub fn log_backfill_start() {
+    println!("{} backfill...", blue().apply_to("loading"));
+}
+
+pub fn log_backfill_query(query: &str, fetched: usize) {
     println!(
-        "{} Starting backfill from Bluesky search...",
-        "[BACKFILL]".cyan()
+        "{}searching {}: {} posts",
+        tree_branch(),
+        cyan().apply_to(query),
+        bold().apply_to(fetched)
     );
 }
 
-pub fn log_backfill_progress(fetched: usize, scored: usize, accepted: usize) {
+pub fn log_backfill_complete(total_accepted: usize, total_processed: usize) {
     println!(
-        "{} Progress: {} fetched, {} scored, {} accepted",
-        "[BACKFILL]".cyan(),
-        fetched,
-        scored,
-        accepted
+        "{}{} backfill: {}/{} posts accepted",
+        tree_end(),
+        green().apply_to("completed"),
+        bold().apply_to(total_accepted),
+        dim().apply_to(total_processed)
     );
 }
 
-pub fn log_backfill_done(accepted: usize) {
-    println!(
-        "{} Backfill complete: {} posts added",
-        "[BACKFILL]".green(),
-        accepted
-    );
+#[derive(Debug, Clone)]
+pub enum AssessmentResult {
+    Rejected(String),
+    NoRelevance,
+    MlRejected(String),
+    BelowThreshold(f32),
+    Accepted(f32),
 }
 
-pub fn log_backfill_error(error: &str) {
-    eprintln!("{} Error: {}", "[BACKFILL]".red(), error);
+#[derive(Debug, Clone, Default)]
+pub struct PostAssessment {
+    pub text_preview: String,
+    pub filter_result: Option<FilterResult>,
+    pub has_keywords: bool,
+    pub has_hashtags: bool,
+    pub ml_scores: Option<MLScores>,
+    pub content_signals: Option<ContentSignals>,
+    pub media_info: Option<MediaInfo>,
+    pub signals: Option<PrioritySignals>,
+    pub breakdown: Option<PriorityBreakdown>,
+    pub result: Option<AssessmentResult>,
 }
 
-pub fn log_backfill_skipped(reason: &str) {
-    println!("{} Skipped: {}", "[BACKFILL]".yellow(), reason);
-}
-
-pub fn log_fetch_start(at_uri: &str) {
-    println!(
-        "\n{} Fetching post from Bluesky...\n  {} AT URI: {}",
-        "[FETCH]".yellow(),
-        tree(false).dimmed(),
-        at_uri.dimmed()
-    );
-}
-pub fn log_fetch_result(err: Option<&str>) {
-    let msg = match err {
-        None => "Post fetched successfully".green().to_string(),
-        Some(e) => format!("Error: {e}").red().to_string(),
-    };
-    println!("  {} {}", tree(true).dimmed(), msg);
-}
-pub fn log_fetch_success() {
-    log_fetch_result(None);
-}
-pub fn log_fetch_error(error: &str) {
-    log_fetch_result(Some(error));
-}
-
-pub fn log_post_header(text: &str, has_media: bool) {
-    let preview = truncate_text(text, 300).replace('\n', " ");
-    println!();
-    separator();
-    println!("{} {}", "Post:".bold(), format!("\"{}\"", preview).cyan());
-    println!(
-        "{}",
-        format!(
-            "[{} chars, media: {}]",
-            text.len(),
-            if has_media { "yes" } else { "no" }
-        )
-        .dimmed()
-    );
-}
-
-pub fn log_prefilter_length(ok: bool, chars: usize, min: usize) {
-    let (status, detail) = if ok {
-        ("OK".green().to_string(), format!("({} chars)", chars))
-    } else {
-        (
-            "TOO SHORT".red().to_string(),
-            format!("({} chars < {})", chars, min),
-        )
-    };
-    println!(
-        "  {} Length:   {} {}",
-        tree(false).dimmed(),
-        status,
-        detail.dimmed()
-    );
-}
-pub fn log_prefilter_length_ok(chars: usize) {
-    log_prefilter_length(true, chars, 0);
-}
-pub fn log_prefilter_length_fail(chars: usize, min: usize) {
-    log_prefilter_length(false, chars, min);
-}
-
-pub fn log_prefilter_no_signals() {
-    println!(
-        "  {} Keywords: {}",
-        tree(false).dimmed(),
-        "NONE".red().bold()
-    );
-    println!(
-        "  {} Hashtags: {}",
-        tree(true).dimmed(),
-        "NONE".red().bold()
-    );
-    println!();
-    separator();
-    println!(
-        "{} - No gamedev keywords or hashtags",
-        "REJECTED".red().bold()
-    );
-}
-
-pub fn log_prefilter_signals(has_kw: bool, kw_count: usize, has_ht: bool, ht_count: usize) {
-    let fmt = |found, count| {
-        if found {
-            format!("{} {}", "OK".green(), format!("({count})").dimmed())
+impl PostAssessment {
+    pub fn new(text: &str) -> Self {
+        let preview = if text.len() > 60 {
+            format!("{}...", &text[..57])
         } else {
-            "NONE".red().bold().to_string()
-        }
-    };
-    println!(
-        "  {} Keywords: {}",
-        tree(false).dimmed(),
-        fmt(has_kw, kw_count)
-    );
-    println!(
-        "  {} Hashtags: {}",
-        tree(true).dimmed(),
-        fmt(has_ht, ht_count)
-    );
-}
-
-pub fn log_inference_start() {
-    println!("  {}", "└─ Running inference...".dimmed());
-}
-
-pub fn log_ml_scores(scores: &MLScores) {
-    let best_ref = REFERENCE_POSTS
-        .get(scores.best_reference_idx)
-        .unwrap_or(&"?");
-    let ref_preview: String = best_ref.chars().take(50).collect();
-
-    log_header("ML scores:");
-    println!(
-        "{} Semantic:       {} {}",
-        tree(false).dimmed(),
-        pct(scores.semantic_score),
-        format!("(match: \"{}...\")", ref_preview).dimmed()
-    );
-
-    if scores.is_negative_label {
-        let marker = if scores.negative_rejection {
-            " [REJECTED]".red().bold().to_string()
-        } else {
-            String::new()
+            text.to_string()
         };
-        println!(
-            "{} Classification: {} {}{}",
-            tree(false).dimmed(),
-            pct(scores.best_label_score).red(),
-            format!("(label: \"{}\")", scores.best_label).dimmed(),
-            marker
-        );
-    } else {
-        println!(
-            "{} Classification: {} {}",
-            tree(false).dimmed(),
-            pct(scores.classification_score),
-            format!(
-                "(label: \"{}\" at {})",
-                scores.best_label,
-                pct(scores.best_label_score)
-            )
-            .dimmed()
-        );
-    }
-
-    println!(
-        "{} Quality:        bait={} synthetic={}",
-        tree(true).dimmed(),
-        pct(scores.quality.engagement_bait_score),
-        pct(scores.quality.synthetic_score)
-    );
-}
-
-pub fn log_content_signals(
-    is_first_person: bool,
-    images: u8,
-    has_video: bool,
-    has_alt_text: bool,
-    link_count: u8,
-    promo_link_count: u8,
-) {
-    println!("  {}", "Content signals".bold());
-    println!(
-        "  {} First person:    {} {}",
-        tree(false).dimmed(),
-        yes_no(is_first_person),
-        format!("(+{})", pct(BONUS_FIRST_PERSON)).dimmed()
-    );
-    println!(
-        "  {} Images:          {} (alt: {})",
-        tree(false).dimmed(),
-        images,
-        yes_no_opt(has_alt_text)
-    );
-    println!(
-        "  {} Video:           {} {}",
-        tree(false).dimmed(),
-        yes_no_opt(has_video),
-        format!("(+{})", pct(BONUS_VIDEO)).dimmed()
-    );
-    println!(
-        "  {} Links:           {} (promo: {})",
-        tree(true).dimmed(),
-        link_count,
-        promo_link_count
-    );
-}
-
-pub fn log_priority_breakdown(b: &PriorityBreakdown) {
-    println!("  {}", "Priority breakdown".bold());
-    println!(
-        "  {} Topic score:     {}",
-        tree(false).dimmed(),
-        pct(b.topic_score)
-    );
-    println!(
-        "  {} Quality penalty: {}",
-        tree(false).dimmed(),
-        signed_pct(-b.quality_penalty)
-    );
-    println!(
-        "  {} Content mod:     {}",
-        tree(false).dimmed(),
-        signed_pct(b.content_modifier)
-    );
-    println!(
-        "  {} Engagement:      {}",
-        tree(false).dimmed(),
-        signed_pct(b.engagement_boost)
-    );
-    println!(
-        "  {} Label boost:     {}",
-        tree(false).dimmed(),
-        signed_pct(b.label_boost)
-    );
-
-    let priority_colored = match b.confidence {
-        ConfidenceTier::Strong | ConfidenceTier::High => format!("{:.2}", b.final_priority).green(),
-        ConfidenceTier::Moderate => format!("{:.2}", b.final_priority).yellow(),
-        ConfidenceTier::Low => format!("{:.2}", b.final_priority).red(),
-    };
-    println!(
-        "  {} {}       {}",
-        tree(true).dimmed(),
-        "Final:".bold(),
-        priority_colored.bold()
-    );
-}
-
-pub fn log_final_result(accepted: bool, b: &PriorityBreakdown) {
-    println!();
-    separator();
-    let status = if accepted {
-        "ACCEPTED".green().bold()
-    } else {
-        "REJECTED".red().bold()
-    };
-    println!(
-        "{} [{}] {}",
-        status,
-        b.confidence.to_string().bold(),
-        b.topic_label.dimmed()
-    );
-
-    if accepted {
-        println!(
-            "  {}",
-            format!("Priority: {:.2}", b.final_priority).dimmed()
-        );
-        if !b.boost_reasons.is_empty() {
-            println!("{} {}", "Boosts:".green(), b.boost_reasons.join(", "));
-        }
-    } else {
-        println!(
-            "  {}",
-            format!("Priority {:.2} below threshold", b.final_priority).dimmed()
-        );
-        if !b.penalty_reasons.is_empty() {
-            println!(
-                "  {}",
-                format!("Reasons: {}", b.penalty_reasons.join(", ")).dimmed()
-            );
+        Self {
+            text_preview: preview.replace('\n', " "),
+            ..Default::default()
         }
     }
+
+    pub fn set_filter_result(&mut self, result: FilterResult) {
+        if let FilterResult::Reject(ref filter) = result {
+            self.result = Some(AssessmentResult::Rejected(format_filter(filter)));
+        }
+        self.filter_result = Some(result);
+    }
+
+    pub fn set_relevance(&mut self, keywords: bool, hashtags: bool) {
+        self.has_keywords = keywords;
+        self.has_hashtags = hashtags;
+        if !keywords && !hashtags {
+            self.result = Some(AssessmentResult::NoRelevance);
+        }
+    }
+
+    pub fn set_ml_scores(&mut self, scores: MLScores) {
+        if scores.negative_rejection {
+            self.result = Some(AssessmentResult::MlRejected(scores.best_label.clone()));
+        }
+        self.ml_scores = Some(scores);
+    }
+
+    pub fn set_content(&mut self, signals: ContentSignals, media: MediaInfo) {
+        self.content_signals = Some(signals);
+        self.media_info = Some(media);
+    }
+
+    pub fn set_priority(&mut self, signals: PrioritySignals, breakdown: PriorityBreakdown) {
+        self.signals = Some(signals);
+        self.breakdown = Some(breakdown);
+    }
+
+    pub fn set_threshold_result(&mut self, passed: bool, priority: f32) {
+        if self.result.is_none() {
+            self.result = Some(if passed {
+                AssessmentResult::Accepted(priority)
+            } else {
+                AssessmentResult::BelowThreshold(priority)
+            });
+        }
+    }
+
+    pub fn print(&self) {
+        let mut lines: Vec<String> = Vec::new();
+
+        let is_accepted = matches!(&self.result, Some(AssessmentResult::Accepted(_)));
+
+        lines.push(format!(
+            "{} \"{}\"",
+            magenta().apply_to(bold().apply_to("post assessment")),
+            dim().apply_to(&self.text_preview)
+        ));
+
+        if let Some(ref filter_result) = self.filter_result {
+            lines.push(String::new());
+            lines.push(format!("{}", bold().apply_to("filters")));
+
+            let filter_str = match filter_result {
+                FilterResult::Pass => format!("{}", green().apply_to("pass")),
+                FilterResult::Reject(f) => {
+                    format!("{} ({})", red().apply_to("reject"), format_filter(f))
+                }
+            };
+
+            let kw_style = if self.has_keywords { green() } else { dim() };
+            let ht_style = if self.has_hashtags { green() } else { dim() };
+
+            lines.push(format!(
+                "{}{} {}",
+                tree_branch(),
+                pad_label("status", 1),
+                filter_str
+            ));
+            lines.push(format!(
+                "{}{} {}",
+                tree_branch(),
+                pad_label("keywords", 1),
+                kw_style.apply_to(self.has_keywords)
+            ));
+            lines.push(format!(
+                "{}{} {}",
+                tree_end(),
+                pad_label("hashtags", 1),
+                ht_style.apply_to(self.has_hashtags)
+            ));
+        }
+
+        if let Some(ref ml) = self.ml_scores {
+            lines.push(String::new());
+            lines.push(format!("{}", bold().apply_to("classification")));
+
+            let label_style = if ml.is_negative_label { red() } else { green() };
+
+            lines.push(format!(
+                "{}{} {} {}",
+                tree_branch(),
+                pad_label("topic", 1),
+                label_style.apply_to(&ml.best_label),
+                dim().apply_to(format!("({:.0}%)", ml.best_label_score * 100.0))
+            ));
+
+            lines.push(format!(
+                "{}{} {:.0}% {}",
+                tree_branch(),
+                pad_label("semantic", 1),
+                ml.semantic_score * 100.0,
+                dim().apply_to(format!("(idx: {})", ml.best_reference_idx))
+            ));
+
+            let quality = &ml.quality;
+            let bait_style = if quality.engagement_bait_score > 0.5 {
+                yellow()
+            } else {
+                dim()
+            };
+            let synth_style = if quality.synthetic_score > 0.5 {
+                yellow()
+            } else {
+                dim()
+            };
+
+            lines.push(format!(
+                "{}{} {}",
+                tree_branch(),
+                pad_label("bait", 1),
+                bait_style.apply_to(format!("{:.0}%", quality.engagement_bait_score * 100.0))
+            ));
+            lines.push(format!(
+                "{}{} {}",
+                tree_end(),
+                pad_label("synthetic", 1),
+                synth_style.apply_to(format!("{:.0}%", quality.synthetic_score * 100.0))
+            ));
+        }
+
+        if let Some(ref breakdown) = self.breakdown {
+            lines.push(String::new());
+            lines.push(format!("{}", bold().apply_to("priority")));
+
+            let mut boosts: Vec<String> = Vec::new();
+            let mut penalties: Vec<String> = Vec::new();
+
+            if let Some(ref content) = self.content_signals {
+                if content.is_first_person {
+                    boosts.push(format!(
+                        "{}{}{}",
+                        pad_label("first-person", 2),
+                        dim().apply_to("+"),
+                        green().apply_to("10%")
+                    ));
+                }
+                if content.has_video {
+                    boosts.push(format!(
+                        "{}{}{}",
+                        pad_label("video", 2),
+                        dim().apply_to("+"),
+                        green().apply_to("10%")
+                    ));
+                }
+                if content.images > 0 && content.has_alt_text {
+                    boosts.push(format!(
+                        "{}{}{}",
+                        pad_label("alt-text", 2),
+                        dim().apply_to("+"),
+                        green().apply_to("5%")
+                    ));
+                }
+                if content.images >= 3 {
+                    penalties.push(format!(
+                        "{}{}{} {}",
+                        pad_label("images", 2),
+                        dim().apply_to("-"),
+                        yellow().apply_to("10%"),
+                        dim().apply_to(format!("({})", content.images))
+                    ));
+                }
+                if content.link_count > 0 {
+                    let penalty = content.link_count as f32 * 3.0;
+                    penalties.push(format!(
+                        "{}{}{} {}",
+                        pad_label("links", 2),
+                        dim().apply_to("-"),
+                        yellow().apply_to(format!("{:.0}%", penalty)),
+                        dim().apply_to(format!("({})", content.link_count))
+                    ));
+                }
+                if content.promo_link_count > 0 {
+                    let penalty = content.promo_link_count as f32 * 8.0;
+                    penalties.push(format!(
+                        "{}{}{} {}",
+                        pad_label("promo-links", 2),
+                        dim().apply_to("-"),
+                        yellow().apply_to(format!("{:.0}%", penalty)),
+                        dim().apply_to(format!("({})", content.promo_link_count))
+                    ));
+                }
+            }
+
+            for boost in &breakdown.boost_reasons {
+                if !boost.contains("first-person")
+                    && !boost.contains("video")
+                    && !boost.contains("image-with-alt")
+                {
+                    boosts.push(format!("{}", green().apply_to(boost)));
+                }
+            }
+
+            for penalty in &breakdown.penalty_reasons {
+                if !penalty.contains("images")
+                    && !penalty.contains("links")
+                    && !penalty.contains("promo")
+                {
+                    penalties.push(format!("{}", yellow().apply_to(penalty)));
+                }
+            }
+
+            lines.push(format!("{}{}", tree_branch(), pad_label("boosts", 1)));
+            if boosts.is_empty() {
+                lines.push(format!(
+                    "{}{}{}",
+                    tree_indent(),
+                    tree_end(),
+                    dim().apply_to("none")
+                ));
+            } else {
+                let boost_count = boosts.len();
+                for (i, boost) in boosts.iter().enumerate() {
+                    let boost_branch = if i == boost_count - 1 {
+                        tree_end()
+                    } else {
+                        tree_branch()
+                    };
+                    lines.push(format!("{}{}{}", tree_indent(), boost_branch, boost));
+                }
+            }
+
+            lines.push(format!("{}{}", tree_branch(), pad_label("penalties", 1)));
+            if penalties.is_empty() {
+                lines.push(format!(
+                    "{}{}{}",
+                    tree_indent(),
+                    tree_end(),
+                    dim().apply_to("none")
+                ));
+            } else {
+                let penalty_count = penalties.len();
+                for (i, penalty) in penalties.iter().enumerate() {
+                    let penalty_branch = if i == penalty_count - 1 {
+                        tree_end()
+                    } else {
+                        tree_branch()
+                    };
+                    lines.push(format!("{}{}{}", tree_indent(), penalty_branch, penalty));
+                }
+            }
+
+            lines.push(format!("{}{}", tree_branch(), pad_label("scores", 1)));
+            lines.push(format!(
+                "{}{}{} {:.2}",
+                tree_indent(),
+                tree_branch(),
+                pad_label("topic", 2),
+                breakdown.topic_score
+            ));
+            lines.push(format!(
+                "{}{}{} {:.2}",
+                tree_indent(),
+                tree_branch(),
+                pad_label("semantic", 2),
+                self.signals
+                    .as_ref()
+                    .map(|s| s.semantic_score)
+                    .unwrap_or(0.0)
+            ));
+            lines.push(format!(
+                "{}{}{}{}",
+                tree_indent(),
+                tree_branch(),
+                pad_label("content", 2),
+                format_signed(breakdown.content_modifier)
+            ));
+            lines.push(format!(
+                "{}{}{} {:.2}",
+                tree_indent(),
+                tree_branch(),
+                pad_label("quality", 2),
+                breakdown.quality_penalty
+            ));
+            lines.push(format!(
+                "{}{}{}{}",
+                tree_indent(),
+                tree_branch(),
+                pad_label("engagement", 2),
+                format_signed(breakdown.engagement_boost)
+            ));
+            lines.push(format!(
+                "{}{}{}{}",
+                tree_indent(),
+                tree_end(),
+                pad_label("label", 2),
+                format_signed(breakdown.label_boost)
+            ));
+
+            let final_style = if breakdown.final_priority < 1.0 {
+                yellow()
+            } else {
+                green()
+            };
+
+            lines.push(format!(
+                "{}{} {}",
+                tree_end(),
+                pad_label("final priority", 1),
+                final_style.apply_to(format!("{:.2}", breakdown.final_priority))
+            ));
+
+            lines.push(String::new());
+            lines.push(format!("{}", bold().apply_to("result")));
+
+            let threshold_style = if breakdown.final_priority >= 0.5 {
+                green().dim()
+            } else {
+                red().dim()
+            };
+            let score_str = format!(
+                "{:.2} {}",
+                breakdown.final_priority,
+                threshold_style.apply_to(if breakdown.final_priority >= 0.5 {
+                    "(>=0.5)"
+                } else {
+                    "(<0.5)"
+                })
+            );
+
+            let conf_str = breakdown.confidence.to_string().to_lowercase();
+            let conf_desc = match conf_str.as_str() {
+                "strong" => "[strong] definitely gamedev",
+                "high" => "[high] likely gamedev",
+                "moderate" => "[moderate] maybe gamedev",
+                _ => "[low] not gamedev",
+            };
+            let conf_style = match conf_str.as_str() {
+                "strong" => green(),
+                "high" => cyan(),
+                "moderate" => yellow(),
+                _ => red(),
+            };
+
+            let status_str = if is_accepted { "ACCEPTED" } else { "REJECTED" };
+            let status_style = if is_accepted {
+                green().bold()
+            } else {
+                red().bold()
+            };
+
+            lines.push(format!(
+                "{}{} {}",
+                tree_branch(),
+                pad_label("score", 1),
+                score_str
+            ));
+            lines.push(format!(
+                "{}{} {}",
+                tree_branch(),
+                pad_label("confidence", 1),
+                conf_style.apply_to(conf_desc)
+            ));
+            lines.push(format!(
+                "{}{} {}",
+                tree_end(),
+                pad_label("status", 1),
+                status_style.apply_to(status_str)
+            ));
+        } else {
+            lines.push(String::new());
+            lines.push(format!("{}", bold().apply_to("result")));
+
+            let status_str = if is_accepted { "accepted" } else { "rejected" };
+            let status_style = if is_accepted {
+                green().bold()
+            } else {
+                red().bold()
+            };
+
+            let reason = match &self.result {
+                Some(AssessmentResult::Rejected(r)) => r.clone(),
+                Some(AssessmentResult::NoRelevance) => "no relevant keywords/hashtags".into(),
+                Some(AssessmentResult::MlRejected(label)) => {
+                    format!("ml classification ({})", label)
+                }
+                Some(AssessmentResult::BelowThreshold(p)) => {
+                    format!("below threshold ({:.2} < 0.50)", p)
+                }
+                _ => "unknown".into(),
+            };
+
+            lines.push(format!(
+                "{}{} {}",
+                tree_branch(),
+                pad_label("status", 1),
+                status_style.apply_to(status_str)
+            ));
+            lines.push(format!(
+                "{}{} {}",
+                tree_end(),
+                pad_label("reason", 1),
+                dim().apply_to(reason)
+            ));
+        }
+
+        println!("{}", lines.join("\n"));
+    }
 }
 
-pub fn log_accepted_post(text: &str, b: &PriorityBreakdown, scores: &MLScores) {
-    log_post_result(text, b, Some(scores), true);
+fn format_filter(filter: &Filter) -> String {
+    match filter {
+        Filter::BlockedKeyword(kw) => format!("{} ({})", filter, kw),
+        Filter::BlockedHashtag(ht) => format!("{} ({})", filter, ht),
+        Filter::HighConfidenceNegative(label) => format!("{} ({})", filter, label),
+        _ => filter.to_string(),
+    }
 }
 
-pub fn log_rejected_post(text: &str, b: &PriorityBreakdown) {
-    log_post_result(text, b, None, false);
-}
-
-fn log_post_result(text: &str, b: &PriorityBreakdown, scores: Option<&MLScores>, accepted: bool) {
-    let clean = text.replace('\n', " ");
-    let preview = truncate_text(&clean, 300);
-    println!();
-    separator();
-    let status_fmt = if accepted {
-        "ACCEPTED".green().bold()
-    } else {
-        "REJECTED".yellow().bold()
-    };
+pub fn log_post_accepted(uri: &str, priority: f32) {
     println!(
-        "{} [{}] {} {}",
-        status_fmt,
-        b.confidence.to_string().bold(),
-        b.topic_label.dimmed(),
-        format!("[{} chars]", text.len()).dimmed()
+        "{} post: {} (priority: {:.2})",
+        green().apply_to("queued"),
+        dim().apply_to(truncate_uri(uri)),
+        bold().apply_to(priority)
     );
-    let preview_fmt = if accepted {
-        format!("\"{}\"", preview).cyan()
-    } else {
-        format!("\"{}\"", preview).dimmed()
-    };
-    println!("{}\n", preview_fmt);
+}
 
-    if accepted {
+pub fn log_cleanup(deleted: usize) {
+    if deleted > 0 {
         println!(
-            "  {} {:.2} {}",
-            "Priority:".bold(),
-            b.final_priority,
-            format!(
-                "(topic:{} content:{} engagement:{})",
-                pct(b.topic_score),
-                signed_pct(b.content_modifier),
-                signed_pct(b.engagement_boost)
-            )
-            .dimmed()
+            "{} {} old entries",
+            dim().apply_to("cleaned"),
+            bold().apply_to(deleted)
         );
-        if !b.boost_reasons.is_empty() {
-            println!("{} {}", "Boosts:".green(), b.boost_reasons.join(", "));
+    }
+}
+
+pub fn log_flush(posts: usize, likes: usize) {
+    if posts > 0 || likes > 0 {
+        println!(
+            "{} {} posts, {} likes",
+            dim().apply_to("flushed"),
+            bold().apply_to(posts),
+            bold().apply_to(likes)
+        );
+    }
+}
+
+fn truncate_uri(uri: &str) -> String {
+    if let Some(rkey_start) = uri.rfind('/') {
+        let rkey = &uri[rkey_start + 1..];
+        if rkey.len() > 13 {
+            format!(".../{}", rkey)
+        } else {
+            uri.to_string()
         }
-        if !b.penalty_reasons.is_empty() {
-            println!("{} {}", "Penalties:".yellow(), b.penalty_reasons.join(", "));
-        }
-        if let Some(s) = scores {
-            let best_ref = REFERENCE_POSTS.get(s.best_reference_idx).unwrap_or(&"?");
-            let ref_short: String = best_ref.chars().take(40).collect();
-            println!(
-                "  {}",
-                format!("ML: {} semantic match=\"{}...\"", s.best_label, ref_short).dimmed()
-            );
-        }
+    } else if uri.len() > 40 {
+        format!("{}...", &uri[..37])
     } else {
-        println!(
-            "  {} {:.2} {}",
-            "Priority:".dimmed(),
-            b.final_priority,
-            "(below threshold)".dimmed()
-        );
-        if !b.penalty_reasons.is_empty() {
-            println!(
-                "  {}",
-                format!("Reason: {}", b.penalty_reasons.join(", ")).dimmed()
-            );
-        }
+        uri.to_string()
     }
 }

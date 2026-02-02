@@ -3,9 +3,6 @@ use rust_bert::pipelines::sentence_embeddings::{
     SentenceEmbeddingsBuilder, SentenceEmbeddingsModel, SentenceEmbeddingsModelType,
 };
 use simsimd::SpatialSimilarity;
-use std::time::Instant;
-
-use crate::utils::{log_ml_model_loaded, log_ml_step, log_ml_step_done};
 
 pub const REFERENCE_POSTS: &[&str] = &[
     "Just implemented the new combat system, feels so satisfying!",
@@ -37,24 +34,9 @@ pub const REFERENCE_POSTS: &[&str] = &[
 ];
 
 pub fn compute_reference_embeddings() -> Result<(SentenceEmbeddingsModel, Vec<Vec<f32>>)> {
-    log_ml_step("Loading sentence embeddings model...");
-    let start = Instant::now();
     let embeddings = SentenceEmbeddingsBuilder::remote(SentenceEmbeddingsModelType::AllMiniLmL12V2)
         .create_model()?;
-    log_ml_model_loaded("Sentence embeddings model", start.elapsed().as_secs_f32());
-
-    log_ml_step("Computing reference embeddings...");
-    let start = Instant::now();
     let reference_embeddings = embeddings.encode(REFERENCE_POSTS)?;
-    log_ml_step_done(
-        "Reference embeddings computed",
-        &format!(
-            "{} posts, {:.1}s",
-            reference_embeddings.len(),
-            start.elapsed().as_secs_f32()
-        ),
-    );
-
     Ok((embeddings, reference_embeddings))
 }
 

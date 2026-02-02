@@ -2,13 +2,10 @@ use crate::db::{self, DbPool, NewLike, NewPost};
 use crate::engagement::EngagementTracker;
 use crate::scoring::{
     apply_filters, apply_ml_filter, apply_time_decay, calculate_priority, extract_content_signals,
-    has_hashtags, has_keywords, label_multiplier, passes_threshold, Filter, FilterResult, MLHandle,
+    has_hashtags, has_keywords, label_multiplier, passes_threshold, FilterResult, MLHandle,
     MediaInfo, PrioritySignals,
 };
-use crate::utils::{
-    log_accepted_post, log_feed_error, log_feed_served, log_filter_rejected,
-    log_ml_filter_rejected, log_rejected_post,
-};
+use crate::utils::logs::{self, PostAssessment};
 use chrono::Utc;
 use rand::Rng;
 use skyfeed::{Embed, FeedHandler, FeedRequest, FeedResult, Post, Uri};
@@ -103,12 +100,17 @@ impl GameDevFeedHandler {
             .filter(|like| !deletes.contains(&like.post_uri))
             .collect();
 
+        let post_count = posts_to_insert.len();
+        let like_count = likes_to_insert.len();
+
         if !posts_to_insert.is_empty() {
             db::insert_posts(&mut conn, posts_to_insert)?;
         }
         if !likes_to_insert.is_empty() {
             db::insert_likes(&mut conn, likes_to_insert)?;
         }
+
+        logs::log_flush(post_count, like_count);
 
         Ok(())
     }
@@ -121,7 +123,10 @@ impl GameDevFeedHandler {
         let engagement_deleted = self.engagement.cleanup_old_engagement(cutoff).unwrap_or(0);
         let posts_deleted = db::cleanup_old_posts(&mut conn, cutoff, MAX_STORED_POSTS)?;
 
-        Ok(engagement_deleted + posts_deleted)
+        let total_deleted = engagement_deleted + posts_deleted;
+        logs::log_cleanup(total_deleted);
+
+        Ok(total_deleted)
     }
 
     #[allow(dead_code)]
@@ -140,25 +145,25 @@ impl FeedHandler for GameDevFeedHandler {
         let lang = post.langs.first().map(|s| s.as_str());
         let author_did = post.author_did.0.as_str();
 
-        let filter_result = apply_filters(text, lang, Some(author_did), |did| self.is_spammer(did));
+        let mut assessment = PostAssessment::new(text);
 
-        if let FilterResult::Reject(filter) = filter_result {
-            log_filter_rejected(text, &filter);
+        let filter_result = apply_filters(text, lang, Some(author_did), |did| self.is_spammer(did));
+        assessment.set_filter_result(filter_result.clone());
+
+        if let FilterResult::Reject(_) = filter_result {
             return;
         }
 
         let (found_keywords, _keyword_count) = has_keywords(text);
         let (found_hashtags, _hashtag_count) = has_hashtags(text);
+        assessment.set_relevance(found_keywords, found_hashtags);
 
         if !found_keywords && !found_hashtags {
-            log_filter_rejected(
-                text,
-                &Filter::BlockedKeyword("no-gamedev-signals".to_string()),
-            );
             return;
         }
 
         let ml_scores = self.ml_handle.score(text.clone()).await;
+        assessment.set_ml_scores(ml_scores.clone());
 
         let ml_filter_result = apply_ml_filter(
             &ml_scores.best_label,
@@ -167,12 +172,12 @@ impl FeedHandler for GameDevFeedHandler {
         );
 
         if let FilterResult::Reject(_) = ml_filter_result {
-            log_ml_filter_rejected(text, &ml_scores.best_label, ml_scores.best_label_score);
             return;
         }
 
         let media_info = Self::extract_media_info(&post);
         let content = extract_content_signals(text, &media_info);
+        assessment.set_content(content.clone(), media_info.clone());
 
         let signals = PrioritySignals {
             topic_classification_score: ml_scores.classification_score,
@@ -194,11 +199,13 @@ impl FeedHandler for GameDevFeedHandler {
         };
 
         let breakdown = calculate_priority(&signals);
-        let text_preview = crate::utils::truncate_text(text, 300);
+        assessment.set_priority(signals.clone(), breakdown.clone());
 
-        if passes_threshold(&breakdown) {
-            log_accepted_post(text_preview, &breakdown, &ml_scores);
+        let passed = passes_threshold(&breakdown);
+        assessment.set_threshold_result(passed, breakdown.final_priority);
+        assessment.print();
 
+        if passed {
             let new_post = NewPost {
                 uri: post.uri.0.clone(),
                 text: text.clone(),
@@ -225,8 +232,6 @@ impl FeedHandler for GameDevFeedHandler {
             };
 
             self.pending_posts.push(new_post);
-        } else {
-            log_rejected_post(text_preview, &breakdown);
         }
     }
 
@@ -252,8 +257,7 @@ impl FeedHandler for GameDevFeedHandler {
 
         let mut conn = match self.pool.get() {
             Ok(c) => c,
-            Err(e) => {
-                log_feed_error(&format!("Failed to get DB connection: {e}"));
+            Err(_) => {
                 return FeedResult {
                     cursor: None,
                     feed: vec![],
@@ -263,8 +267,7 @@ impl FeedHandler for GameDevFeedHandler {
 
         let posts = match db::get_feed(&mut conn, cutoff) {
             Ok(p) => p,
-            Err(e) => {
-                log_feed_error(&format!("Failed to query feed: {e}"));
+            Err(_) => {
                 return FeedResult {
                     cursor: None,
                     feed: vec![],
@@ -318,7 +321,7 @@ impl FeedHandler for GameDevFeedHandler {
 
         let feed: Vec<Uri> = page_posts.iter().map(|(p, _)| Uri(p.uri.clone())).collect();
 
-        log_feed_served(feed.len(), total_count, true);
+        logs::log_feed_served(feed.len(), request.cursor.as_ref());
 
         FeedResult {
             cursor: next_cursor,

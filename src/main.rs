@@ -14,28 +14,11 @@ use skyfeed::{start, Config};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
-use tracing::subscriber::set_global_default;
-use tracing_subscriber::{fmt, prelude::*, EnvFilter};
-use utils::{
-    log_cleanup_done, log_db_error, log_db_ready, log_db_status, log_server_starting,
-    log_startup_config,
-};
+use utils::logs;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     dotenvy::dotenv().ok();
-
-    let subscriber = tracing_subscriber::registry()
-        .with(EnvFilter::from_default_env().add_directive("devlogs_feed=info".parse()?))
-        .with(
-            fmt::layer()
-                .with_target(false)
-                .with_thread_ids(false)
-                .with_file(false)
-                .with_line_number(false)
-                .compact(),
-        );
-    set_global_default(subscriber).expect("Failed to set tracing subscriber");
 
     let publisher_did =
         std::env::var("PUBLISHER_DID").unwrap_or_else(|_| "did:web:example.com".to_string());
@@ -53,26 +36,18 @@ async fn main() -> Result<()> {
         .map(|v| v == "1" || v.to_lowercase() == "true")
         .unwrap_or(false);
 
-    log_startup_config(
-        &publisher_did,
-        &hostname,
-        port,
-        &database_url,
-        firehose_limit,
-    );
+    logs::log_init(&hostname, port, enable_backfill);
 
-    log_db_status("Initializing SQLite connection pool...");
     let pool = establish_pool(&database_url);
 
     {
         let mut conn = pool.get().expect("Failed to get initial connection");
         configure_connection(&mut conn).expect("Failed to configure SQLite connection");
     }
-    log_db_ready();
 
-    utils::log_ml_loading("Spawning ML worker thread...");
-    utils::log_ml_loading("Models will load in background (this may take a while on first run)");
+    logs::log_ml_loading();
     let ml_handle = MLHandle::spawn()?;
+    logs::log_ml_ready();
 
     if enable_backfill {
         tokio::time::sleep(Duration::from_secs(10)).await;
@@ -87,9 +62,7 @@ async fn main() -> Result<()> {
         loop {
             interval.tick().await;
             let mut h = handler_flush.lock().await;
-            if let Err(e) = h.flush_pending() {
-                log_db_error(&format!("Flush error: {}", e));
-            }
+            let _ = h.flush_pending();
         }
     });
 
@@ -99,24 +72,14 @@ async fn main() -> Result<()> {
         loop {
             interval.tick().await;
             let h = handler_cleanup.lock().await;
-            match h.cleanup_old_posts() {
-                Ok(deleted) if deleted > 0 => {
-                    log_cleanup_done(deleted);
-                }
-                Err(e) => {
-                    log_db_error(&format!("Cleanup error: {}", e));
-                }
-                _ => {}
-            }
+            let _ = h.cleanup_old_posts();
         }
     });
 
     let config = Config {
         publisher_did,
-        feed_generator_hostname: hostname,
+        feed_generator_hostname: hostname.clone(),
     };
-
-    log_server_starting(port);
 
     start(config, firehose_limit, handler, ([0, 0, 0, 0], port)).await;
 

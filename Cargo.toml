@@ -15,7 +15,6 @@ path = "src/bin/score_post.rs"
 [dependencies]
 anyhow = "1.0"
 chrono = "0.4"
-colored = "2"
 console = { version = "0.16", features = ["std"] }
 diesel = { version = "2.2", features = ["sqlite", "returning_clauses_for_sqlite_3_35", "r2d2"] }
 dotenvy = "0.15"
@@ -28,7 +27,5 @@ serde_json = "1.0"
 skyfeed = "0.7.0"
 strum = { version = "0.26", features = ["derive"] }
 tokio = { version = "1.49.0", features = ["full"] }
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 urlencoding = "2"
 rand = "0.9"

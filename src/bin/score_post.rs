@@ -1,28 +1,12 @@
 use devlogs_feed::scoring::{
     apply_filters, apply_ml_filter, calculate_priority, extract_content_signals, has_hashtags,
-    has_keywords, label_multiplier, passes_threshold, strip_hashtags, Filter, FilterResult,
-    MLHandle, MediaInfo, PrioritySignals, MIN_TEXT_LENGTH,
+    has_keywords, label_multiplier, passes_threshold, FilterResult, MLHandle, MediaInfo,
+    PrioritySignals,
 };
 use devlogs_feed::utils::bluesky::{fetch_post, parse_bluesky_url};
-use devlogs_feed::utils::{
-    log_content_signals, log_dimmed, log_fetch_error, log_fetch_start, log_fetch_success,
-    log_final_result, log_generic_error, log_header, log_inference_start, log_ml_scores,
-    log_newline, log_post_header, log_prefilter_length_fail, log_prefilter_length_ok,
-    log_prefilter_no_signals, log_prefilter_signals, log_priority_breakdown,
-};
+use devlogs_feed::utils::logs::{self, PostAssessment};
 use std::env;
 use std::process;
-
-fn print_usage() {
-    eprintln!("Usage: score-post <url|text> [--media|-m] [--video|-v] [--alt|-a]");
-    eprintln!();
-    eprintln!("Arguments:");
-    eprintln!("  <url>      Bluesky post URL (https://bsky.app/...) or AT URI (at://...)");
-    eprintln!("  <text>     Raw post text to score");
-    eprintln!("  --media    Indicate the post has media (images)");
-    eprintln!("  --video    Indicate the post has video");
-    eprintln!("  --alt      Indicate images have ALT text");
-}
 
 #[tokio::main]
 async fn main() {
@@ -45,7 +29,7 @@ async fn main() {
         .collect();
 
     if text_args.is_empty() {
-        print_usage();
+        eprintln!("usage: score-post <url_or_text> [--media|-m] [--video|-v] [--alt|-a]");
         process::exit(1);
     }
 
@@ -56,11 +40,8 @@ async fn main() {
         .join(" ");
 
     let (text, media_info) = if let Some(at_uri) = parse_bluesky_url(&input) {
-        log_fetch_start(&at_uri);
-
         match fetch_post(&at_uri).await {
             Ok(post) => {
-                log_fetch_success();
                 let media = MediaInfo {
                     image_count: post.image_count.min(255) as u8,
                     has_video: post.has_video,
@@ -69,7 +50,7 @@ async fn main() {
                 (post.text, media)
             }
             Err(e) => {
-                log_fetch_error(&e);
+                eprintln!("error: failed to fetch post: {}", e);
                 process::exit(1);
             }
         }
@@ -82,88 +63,56 @@ async fn main() {
         (input, media)
     };
 
-    log_newline();
-    log_header("Loading ML models...");
-    log_dimmed("└─ This may take a while on first run");
+    logs::log_ml_loading();
     let ml_handle = match MLHandle::spawn() {
         Ok(handle) => handle,
         Err(e) => {
-            log_generic_error("[ERROR]", &format!("Failed to load ML models: {e}"));
+            eprintln!("error: failed to spawn ml handle: {}", e);
             process::exit(1);
         }
     };
 
     tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+    logs::log_ml_ready();
+
     score_post(&text, &media_info, &ml_handle).await;
 }
 
 async fn score_post(text: &str, media: &MediaInfo, ml_handle: &MLHandle) {
-    let has_media = media.image_count > 0 || media.has_video;
-    log_post_header(text, has_media);
-    log_newline();
-
-    log_header("Phase 1: Filters");
+    let mut assessment = PostAssessment::new(text);
 
     let filter_result = apply_filters(text, Some("en"), None, |_| false);
-    if let FilterResult::Reject(filter) = &filter_result {
-        match filter {
-            Filter::MinLength => {
-                log_prefilter_length_fail(strip_hashtags(text).len(), MIN_TEXT_LENGTH);
-            }
-            _ => {
-                println!("  Rejected: {}", filter);
-            }
-        }
+    assessment.set_filter_result(filter_result.clone());
+    if let FilterResult::Reject(_) = &filter_result {
+        assessment.print();
         return;
     }
-    log_prefilter_length_ok(strip_hashtags(text).len());
 
-    let (found_keywords, keyword_count) = has_keywords(text);
-    let (found_hashtags, hashtag_count) = has_hashtags(text);
+    let (found_keywords, _) = has_keywords(text);
+    let (found_hashtags, _) = has_hashtags(text);
+    assessment.set_relevance(found_keywords, found_hashtags);
 
     if !found_keywords && !found_hashtags {
-        log_prefilter_no_signals();
+        assessment.print();
         return;
     }
 
-    log_prefilter_signals(found_keywords, keyword_count, found_hashtags, hashtag_count);
-    log_newline();
-
-    log_header("Phase 2: ML Classification");
-    log_inference_start();
     let scores = ml_handle.score(text.to_string()).await;
-    log_newline();
-
-    log_ml_scores(&scores);
-    log_newline();
+    assessment.set_ml_scores(scores.clone());
 
     let ml_filter_result = apply_ml_filter(
         &scores.best_label,
         scores.best_label_score,
         scores.is_negative_label,
     );
-    if let FilterResult::Reject(filter) = ml_filter_result {
-        println!(
-            "  {} ML filter rejection: {}",
-            "REJECTED".to_string(),
-            filter
-        );
+    if let FilterResult::Reject(_) = ml_filter_result {
+        assessment.print();
         return;
     }
 
-    log_header("Phase 3: Content Signals");
     let content = extract_content_signals(text, media);
-    log_content_signals(
-        content.is_first_person,
-        content.images,
-        content.has_video,
-        content.has_alt_text,
-        content.link_count,
-        content.promo_link_count,
-    );
-    log_newline();
+    assessment.set_content(content.clone(), media.clone());
 
-    log_header("Phase 4: Priority Calculation");
     let signals = PrioritySignals {
         topic_classification_score: scores.classification_score,
         semantic_score: scores.semantic_score,
@@ -184,9 +133,70 @@ async fn score_post(text: &str, media: &MediaInfo, ml_handle: &MLHandle) {
     };
 
     let breakdown = calculate_priority(&signals);
-    log_priority_breakdown(&breakdown);
-    log_newline();
+    assessment.set_priority(signals.clone(), breakdown.clone());
 
-    log_final_result(passes_threshold(&breakdown), &breakdown);
-    log_newline();
+    let passed = passes_threshold(&breakdown);
+    assessment.set_threshold_result(passed, breakdown.final_priority);
+    assessment.print();
+}
+
+#[cfg(test)]
+mod tests {
+    use devlogs_feed::scoring::{evaluate_post, MLHandle, MediaInfo};
+    use devlogs_feed::utils::bluesky::{fetch_post, parse_bluesky_url};
+
+    const POSTS_EXPECTED_ACCEPT: &[&str] = &[
+        "at://did:plc:uthii4i7zrmqnbxex5esjxzp/app.bsky.feed.post/3maqv5l6xl22y",
+        "at://did:plc:jguiyddnwoie7ddpfjsgacbk/app.bsky.feed.post/3mdt3m3fq422g",
+    ];
+
+    const POSTS_EXPECTED_REJECT: &[&str] = &[
+        "at://did:plc:yrry24lfrtfzidba3kbmgdwm/app.bsky.feed.post/3mdrpa7d4qi2b",
+        "at://did:plc:uyx65egegsinxxncka7m5ijy/app.bsky.feed.post/3mdt43fab2s2y",
+    ];
+
+    async fn evaluate_urls(urls: &[&str], ml_handle: &MLHandle, expect_pass: bool) {
+        for url in urls {
+            let at_uri = parse_bluesky_url(url).expect("Invalid URL format");
+            let post = fetch_post(&at_uri)
+                .await
+                .unwrap_or_else(|e| panic!("Failed to fetch {}: {}", url, e));
+
+            let media = MediaInfo {
+                image_count: post.image_count.min(255) as u8,
+                has_video: post.has_video,
+                has_alt_text: false,
+            };
+            let result = evaluate_post(&post.text, media, ml_handle).await;
+            let passes = result.passes();
+
+            if expect_pass {
+                assert!(
+                    passes,
+                    "Expected post to be ACCEPTED but was rejected: {}\nText: {}",
+                    url, post.text
+                );
+            } else {
+                assert!(
+                    !passes,
+                    "Expected post to be REJECTED but was accepted: {}\nText: {}",
+                    url, post.text
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_full_evaluation_accept() {
+        let ml_handle = MLHandle::spawn().expect("Failed to spawn ML handle");
+        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+        evaluate_urls(POSTS_EXPECTED_ACCEPT, &ml_handle, true).await;
+    }
+
+    #[tokio::test]
+    async fn test_full_evaluation_reject() {
+        let ml_handle = MLHandle::spawn().expect("Failed to spawn ML handle");
+        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+        evaluate_urls(POSTS_EXPECTED_REJECT, &ml_handle, false).await;
+    }
 }

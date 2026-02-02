@@ -24,6 +24,79 @@ pub use semantic::REFERENCE_POSTS;
 
 use chrono::{DateTime, Utc};
 
+pub struct EvaluationResult {
+    pub passes: bool,
+    pub breakdown: Option<PriorityBreakdown>,
+}
+
+impl EvaluationResult {
+    pub fn passes(&self) -> bool {
+        self.passes
+    }
+}
+
+pub async fn evaluate_post(text: &str, media: MediaInfo, ml_handle: &MLHandle) -> EvaluationResult {
+    let filter_result = apply_filters(text, Some("en"), None, |_| false);
+    if let FilterResult::Reject(_) = &filter_result {
+        return EvaluationResult {
+            passes: false,
+            breakdown: None,
+        };
+    }
+
+    let (found_keywords, _) = has_keywords(text);
+    let (found_hashtags, _) = has_hashtags(text);
+    if !found_keywords && !found_hashtags {
+        return EvaluationResult {
+            passes: false,
+            breakdown: None,
+        };
+    }
+
+    let scores = ml_handle.score(text.to_string()).await;
+
+    let ml_filter_result = apply_ml_filter(
+        &scores.best_label,
+        scores.best_label_score,
+        scores.is_negative_label,
+    );
+    if let FilterResult::Reject(_) = ml_filter_result {
+        return EvaluationResult {
+            passes: false,
+            breakdown: None,
+        };
+    }
+
+    let content = extract_content_signals(text, &media);
+
+    let signals = PrioritySignals {
+        topic_classification_score: scores.classification_score,
+        semantic_score: scores.semantic_score,
+        topic_label: scores.best_label.clone(),
+        label_multiplier: label_multiplier(&scores.best_label),
+        engagement_bait_score: scores.quality.engagement_bait_score,
+        synthetic_score: scores.quality.synthetic_score,
+        is_first_person: content.is_first_person,
+        images: content.images,
+        has_video: content.has_video,
+        has_alt_text: content.has_alt_text,
+        link_count: content.link_count,
+        promo_link_count: content.promo_link_count,
+        engagement_velocity: 0.0,
+        reply_count: 0,
+        repost_count: 0,
+        like_count: 0,
+    };
+
+    let breakdown = calculate_priority(&signals);
+    let passes = passes_threshold(&breakdown);
+
+    EvaluationResult {
+        passes,
+        breakdown: Some(breakdown),
+    }
+}
+
 pub const DECAY_EVERY_X_HOURS: f32 = 24.0;
 pub const DECAY_FACTOR: f32 = 0.75;
 

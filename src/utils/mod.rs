@@ -1,4 +1,2 @@
 pub mod bluesky;
-mod logs;
-
-pub use logs::*;
+pub mod logs;
