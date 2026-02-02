@@ -4,7 +4,7 @@ A custom Bluesky feed with ML-curated gamedev content that boosts organic human 
 
 ## Usage
 
-This feed is [available here](/). Click on the "📌" icon to pin it, and click on the feed name, then on the "❤️ Like" button to like it!
+This feed is [available here](https://bsky.app/profile/doceazedo.com/feed/devlogs-feed). Click on the "📌" icon to pin it, and click on the feed name, then on the "❤️ Like" button to like it!
 
 ## Running locally
 
