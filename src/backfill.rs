@@ -1,8 +1,7 @@
 use crate::db::{self, DbPool, NewPost};
 use crate::scoring::{
     apply_filters, apply_ml_filter, calculate_priority, calculate_score, extract_content_signals,
-    has_hashtags, has_keywords, label_boost, FilterResult, MLHandle, MediaInfo,
-    PrioritySignals,
+    has_hashtags, has_keywords, label_boost, FilterResult, MLHandle, MediaInfo, PrioritySignals,
 };
 use crate::utils::bluesky::{create_session, extract_facet_links, search_posts, SearchPost};
 use crate::utils::logs::{self, PostAssessment};

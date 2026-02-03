@@ -15,7 +15,7 @@ pub const FEED_CUTOFF_HOURS: i64 = 96;
 pub const FEED_DEFAULT_LIMIT: usize = 50;
 pub const FEED_MAX_LIMIT: usize = 500;
 pub const MAX_STORED_POSTS: i64 = 5000;
-pub const SHUFFLE_VARIANCE: f32 = 0.20;
+pub const SHUFFLE_VARIANCE: f32 = 0.05;
 
 #[derive(Clone)]
 pub struct GameDevFeedHandler {
@@ -334,11 +334,11 @@ impl FeedHandler for GameDevFeedHandler {
                 let post_time = chrono::DateTime::from_timestamp(p.timestamp, 0).unwrap_or(now);
                 let base_score = apply_time_decay(p.priority, post_time, now);
 
-                let velocity = self.engagement.get_velocity(&p.uri);
-                let engagement_boost = (velocity.ln_1p() * 0.1).min(0.5);
+                // let velocity = self.engagement.get_velocity(&p.uri);
+                // let engagement_boost = (velocity.ln_1p() * 0.1).min(0.5);
 
                 let variance = rng.random_range(-SHUFFLE_VARIANCE..SHUFFLE_VARIANCE);
-                let final_score = (base_score + engagement_boost) * (1.0 + variance);
+                let final_score = base_score * (1.0 + variance);
 
                 (p, final_score)
             })

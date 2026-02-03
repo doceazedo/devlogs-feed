@@ -214,8 +214,9 @@ pub fn calculate_priority(score: &ScoreBreakdown, signals: &PrioritySignals) -> 
         format_signed(label_boost),
     ));
 
-    let final_priority = score.final_score + content_modifier + engagement_boost
-        + authenticity_boost + label_boost - quality_penalty;
+    let final_priority =
+        score.final_score + content_modifier + engagement_boost + authenticity_boost + label_boost
+            - quality_penalty;
 
     let confidence = ConfidenceTier::from_score(score.final_score);
 

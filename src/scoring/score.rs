@@ -16,8 +16,7 @@ impl ScoreBreakdown {
 }
 
 pub fn calculate_score(classification_score: f32, semantic_score: f32) -> ScoreBreakdown {
-    let final_score =
-        classification_score * TOPIC_WEIGHT + semantic_score * SEMANTIC_WEIGHT;
+    let final_score = classification_score * TOPIC_WEIGHT + semantic_score * SEMANTIC_WEIGHT;
 
     ScoreBreakdown {
         classification_score,

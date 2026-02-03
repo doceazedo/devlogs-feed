@@ -1,11 +1,11 @@
 use console::{measure_text_width, Style};
 
-use crate::scoring::score::{TOPIC_WEIGHT, SEMANTIC_WEIGHT};
+use crate::scoring::priority::{GOOD_QUALITY_BOOST_MIN, POOR_QUALITY_PENALTY_MIN};
+use crate::scoring::score::{SEMANTIC_WEIGHT, TOPIC_WEIGHT};
 use crate::scoring::{
     ContentSignals, Filter, FilterResult, MLScores, MediaInfo, PriorityBreakdown, PrioritySignals,
     ScoreBreakdown, SCORE_THRESHOLD,
 };
-use crate::scoring::priority::{POOR_QUALITY_PENALTY_MIN, GOOD_QUALITY_BOOST_MIN};
 
 pub const TREE_BRANCH: char = '\u{251C}';
 pub const TREE_END: char = '\u{2514}';
@@ -357,13 +357,19 @@ impl PostAssessment {
             ));
             lines.push(format!(
                 "{}{} {}",
-                if self.ml_scores.is_some() { tree_branch() } else { tree_end() },
+                if self.ml_scores.is_some() {
+                    tree_branch()
+                } else {
+                    tree_end()
+                },
                 pad_label("hashtags", 1),
                 ht_style.apply_to(self.has_hashtags)
             ));
         }
 
-        if let (Some(ref ml), Some(ref score), Some(ref priority)) = (&self.ml_scores, &self.score, &self.priority) {
+        if let (Some(ref ml), Some(ref score), Some(ref priority)) =
+            (&self.ml_scores, &self.score, &self.priority)
+        {
             let label_style = if ml.is_negative_label { red() } else { green() };
             lines.push(format!(
                 "{}{} {} {}",
