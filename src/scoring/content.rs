@@ -22,6 +22,7 @@ const PROMO_DOMAINS: &[&str] = &[
     "youtu.be",
     "playtester.io",
     "buff.ly",
+    "bit.ly",
 ];
 
 static URL_PATTERN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"https?://[^\s]+").unwrap());
