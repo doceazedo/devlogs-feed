@@ -1,10 +1,11 @@
 use console::{measure_text_width, Style};
 
-use crate::scoring::score::{WEIGHT_CLASSIFICATION, WEIGHT_SEMANTIC};
+use crate::scoring::score::{TOPIC_WEIGHT, SEMANTIC_WEIGHT};
 use crate::scoring::{
     ContentSignals, Filter, FilterResult, MLScores, MediaInfo, PriorityBreakdown, PrioritySignals,
-    ScoreBreakdown, QUALITY_THRESHOLD, SCORE_THRESHOLD,
+    ScoreBreakdown, SCORE_THRESHOLD,
 };
+use crate::scoring::priority::{POOR_QUALITY_PENALTY_MIN, GOOD_QUALITY_BOOST_MIN};
 
 pub const TREE_BRANCH: char = '\u{251C}';
 pub const TREE_END: char = '\u{2514}';
@@ -330,7 +331,7 @@ impl PostAssessment {
 
         if let Some(ref filter_result) = self.filter_result {
             lines.push(String::new());
-            lines.push(format!("{}", bold().apply_to("filters")));
+            lines.push(format!("{}", bold().apply_to("FILTERS")));
 
             let filter_str = match filter_result {
                 FilterResult::Pass => format!("{}", green().apply_to("pass")),
@@ -356,76 +357,38 @@ impl PostAssessment {
             ));
             lines.push(format!(
                 "{}{} {}",
-                tree_end(),
+                if self.ml_scores.is_some() { tree_branch() } else { tree_end() },
                 pad_label("hashtags", 1),
                 ht_style.apply_to(self.has_hashtags)
             ));
         }
 
-        if let Some(ref ml) = self.ml_scores {
-            lines.push(String::new());
-            lines.push(format!("{}", bold().apply_to("classification")));
-
+        if let (Some(ref ml), Some(ref score), Some(ref priority)) = (&self.ml_scores, &self.score, &self.priority) {
             let label_style = if ml.is_negative_label { red() } else { green() };
-
             lines.push(format!(
                 "{}{} {} {}",
-                tree_branch(),
+                tree_end(),
                 pad_label("topic", 1),
                 label_style.apply_to(&ml.best_label),
                 dim().apply_to(format!("({:.0}%)", ml.best_label_score * 100.0))
             ));
 
-            lines.push(format!(
-                "{}{} {:.0}% {}",
-                tree_branch(),
-                pad_label("semantic", 1),
-                ml.semantic_score * 100.0,
-                dim().apply_to(format!("(idx: {})", ml.best_reference_idx))
-            ));
-
-            let quality = &ml.quality;
-            let bait_style = if quality.engagement_bait_score > QUALITY_THRESHOLD {
-                yellow()
-            } else {
-                dim()
-            };
-            let synth_style = if quality.synthetic_score > QUALITY_THRESHOLD {
-                yellow()
-            } else {
-                dim()
-            };
-
-            lines.push(format!(
-                "{}{} {}",
-                tree_branch(),
-                pad_label("bait", 1),
-                bait_style.apply_to(format!("{:.0}%", quality.engagement_bait_score * 100.0))
-            ));
-            lines.push(format!(
-                "{}{} {}",
-                tree_end(),
-                pad_label("synthetic", 1),
-                synth_style.apply_to(format!("{:.0}%", quality.synthetic_score * 100.0))
-            ));
-        }
-
-        if let (Some(ref score), Some(ref priority)) = (&self.score, &self.priority) {
             lines.push(String::new());
-            lines.push(format!("{}", bold().apply_to("score")));
+            lines.push(format!("{}", bold().apply_to("SCORE")));
             lines.push(format!(
                 "{}{} {:.0}% {}",
                 tree_branch(),
-                pad_label("classification", 1),
+                pad_label("topic", 1),
                 score.classification_score * 100.0,
-                dim().apply_to(format!("(x{:.0})", WEIGHT_CLASSIFICATION))
+                dim().apply_to(format!("(weight: {:.1})", TOPIC_WEIGHT))
             ));
             lines.push(format!(
-                "{}{} {:.0}% {}",
+                "{}{} {:.0}% {} {}",
                 tree_branch(),
                 pad_label("semantic", 1),
                 score.semantic_score * 100.0,
-                dim().apply_to(format!("(x{:.0})", WEIGHT_SEMANTIC))
+                dim().apply_to(format!("(idx: {})", ml.best_reference_idx)),
+                dim().apply_to(format!("(weight: {:.1})", SEMANTIC_WEIGHT))
             ));
             let threshold_style = if score.final_score >= SCORE_THRESHOLD {
                 green().dim()
@@ -449,7 +412,47 @@ impl PostAssessment {
             ));
 
             lines.push(String::new());
-            lines.push(format!("{}", bold().apply_to("priority")));
+            lines.push(format!("{}", bold().apply_to("QUALITY")));
+
+            let quality = &ml.quality;
+            let bait_style = if quality.engagement_bait_score >= POOR_QUALITY_PENALTY_MIN {
+                yellow()
+            } else {
+                dim()
+            };
+            let synth_style = if quality.synthetic_score >= POOR_QUALITY_PENALTY_MIN {
+                yellow()
+            } else {
+                dim()
+            };
+
+            let auth_style = if quality.authenticity_score >= GOOD_QUALITY_BOOST_MIN {
+                green()
+            } else {
+                dim()
+            };
+
+            lines.push(format!(
+                "{}{} {}",
+                tree_branch(),
+                pad_label("bait", 1),
+                bait_style.apply_to(format!("{:.0}%", quality.engagement_bait_score * 100.0))
+            ));
+            lines.push(format!(
+                "{}{} {}",
+                tree_branch(),
+                pad_label("synthetic", 1),
+                synth_style.apply_to(format!("{:.0}%", quality.synthetic_score * 100.0))
+            ));
+            lines.push(format!(
+                "{}{} {}",
+                tree_end(),
+                pad_label("authentic", 1),
+                auth_style.apply_to(format!("{:.0}%", quality.authenticity_score * 100.0))
+            ));
+
+            lines.push(String::new());
+            lines.push(format!("{}", bold().apply_to("PRIORITY")));
 
             lines.push(format!("{}{}", tree_branch(), pad_label("boosts", 1)));
             if priority.boost_reasons.is_empty() {
@@ -493,6 +496,7 @@ impl PostAssessment {
 
             let total_boosts = priority.content_modifier.max(0.0)
                 + priority.engagement_boost
+                + priority.authenticity_boost
                 + priority.label_boost.max(0.0);
             let total_penalties = priority.quality_penalty
                 + priority.content_modifier.min(0.0).abs()
@@ -522,7 +526,7 @@ impl PostAssessment {
             ));
 
             lines.push(String::new());
-            lines.push(format!("{}", bold().apply_to("result")));
+            lines.push(format!("{}", bold().apply_to("RESULT")));
 
             let conf_str = priority.confidence.to_string().to_lowercase();
             let conf_desc = match conf_str.as_str() {

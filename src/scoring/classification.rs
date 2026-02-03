@@ -31,18 +31,17 @@ pub enum TopicLabel {
 
 impl TopicLabel {
     pub fn is_positive(&self) -> bool {
-        self.multiplier() >= 1.0
+        match self {
+            Self::GameDevSharingWork | Self::GameProgramming => true,
+            _ => false,
+        }
     }
 
-    pub fn multiplier(&self) -> f32 {
+    pub fn boost(&self) -> f32 {
         match self {
-            Self::GameDevSharingWork => 4.0,
-            Self::GameProgramming => 2.0,
-            Self::Marketing => 0.0,
-            Self::JobPosting => 0.0,
-            Self::GenAi => 0.0,
-            Self::CryptoNFT => 0.0,
-            Self::Unrelated => 0.0,
+            Self::GameDevSharingWork => 0.6,
+            Self::GameProgramming => 0.2,
+            _ => 0.0,
         }
     }
 
@@ -73,9 +72,9 @@ impl FromStr for TopicLabel {
     }
 }
 
-pub fn label_multiplier(label: &str) -> f32 {
+pub fn label_boost(label: &str) -> f32 {
     TopicLabel::from_str(label)
-        .map(|l| l.multiplier())
+        .map(|l| l.boost())
         .unwrap_or(0.6)
 }
 
@@ -108,6 +107,7 @@ pub struct TopicClassification {
 pub struct QualityAssessment {
     pub engagement_bait_score: f32,
     pub synthetic_score: f32,
+    pub authenticity_score: f32,
 }
 
 pub enum MLRequest {
@@ -304,10 +304,15 @@ fn assess_quality_batch(
                     .get(QualityLabel::Synthetic.to_string().as_str())
                     .copied()
                     .unwrap_or(0.0);
+                let authenticity_score = scores
+                    .get(QualityLabel::Authentic.to_string().as_str())
+                    .copied()
+                    .unwrap_or(0.0);
 
                 QualityAssessment {
                     engagement_bait_score,
                     synthetic_score,
+                    authenticity_score,
                 }
             })
             .collect(),

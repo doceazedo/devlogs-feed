@@ -2,7 +2,7 @@ use crate::db::{self, get_post_author, DbPool, NewLike, NewPost};
 use crate::engagement::EngagementTracker;
 use crate::scoring::{
     apply_filters, apply_ml_filter, apply_time_decay, calculate_priority, calculate_score,
-    extract_content_signals, has_hashtags, has_keywords, label_multiplier, FilterResult, MLHandle,
+    extract_content_signals, has_hashtags, has_keywords, label_boost, FilterResult, MLHandle,
     MediaInfo, PrioritySignals,
 };
 use crate::utils::logs::{self, PostAssessment};
@@ -222,9 +222,10 @@ impl FeedHandler for GameDevFeedHandler {
 
         let signals = PrioritySignals {
             topic_label: ml_scores.best_label.clone(),
-            label_multiplier: label_multiplier(&ml_scores.best_label),
+            label_boost: label_boost(&ml_scores.best_label),
             engagement_bait_score: ml_scores.quality.engagement_bait_score,
             synthetic_score: ml_scores.quality.synthetic_score,
+            authenticity_score: ml_scores.quality.authenticity_score,
             is_first_person: content.is_first_person,
             images: content.images,
             has_video: content.has_video,

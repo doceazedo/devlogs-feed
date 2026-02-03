@@ -6,13 +6,13 @@ mod relevance;
 pub mod score;
 mod semantic;
 
-pub use classification::{label_multiplier, MLHandle, MLScores};
+pub use classification::{label_boost, MLHandle, MLScores};
 pub use content::{extract_content_signals, ContentSignals, MediaInfo};
 pub use filters::{apply_filters, apply_ml_filter, Filter, FilterResult};
 pub use priority::{
     calculate_priority, PriorityBreakdown, PrioritySignals, BONUS_FIRST_PERSON,
     BONUS_IMAGE_WITH_ALT, BONUS_VIDEO, MANY_IMAGES_THRESHOLD, PENALTY_MANY_IMAGES,
-    PENALTY_PROMO_LINK, QUALITY_THRESHOLD,
+    PENALTY_PROMO_LINK,
 };
 pub use relevance::{has_hashtags, has_keywords};
 pub use score::{calculate_score, ScoreBreakdown, SCORE_THRESHOLD};
@@ -72,9 +72,10 @@ pub async fn evaluate_post(text: &str, media: MediaInfo, ml_handle: &MLHandle) -
 
     let signals = PrioritySignals {
         topic_label: ml_scores.best_label.clone(),
-        label_multiplier: label_multiplier(&ml_scores.best_label),
+        label_boost: label_boost(&ml_scores.best_label),
         engagement_bait_score: ml_scores.quality.engagement_bait_score,
         synthetic_score: ml_scores.quality.synthetic_score,
+        authenticity_score: ml_scores.quality.authenticity_score,
         is_first_person: content.is_first_person,
         images: content.images,
         has_video: content.has_video,
@@ -139,7 +140,7 @@ mod tests {
     fn test_bonus_video() {
         let score = calculate_score(0.5, 0.5);
         let mut signals = PrioritySignals {
-            label_multiplier: 1.0,
+            label_boost: 1.0,
             ..Default::default()
         };
 
@@ -159,7 +160,7 @@ mod tests {
     fn test_penalty_many_images() {
         let score = calculate_score(0.5, 0.5);
         let mut signals = PrioritySignals {
-            label_multiplier: 1.0,
+            label_boost: 1.0,
             images: 2,
             ..Default::default()
         };

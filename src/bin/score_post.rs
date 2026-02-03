@@ -1,6 +1,6 @@
 use devlogs_feed::scoring::{
     apply_filters, apply_ml_filter, calculate_priority, calculate_score, extract_content_signals,
-    has_hashtags, has_keywords, label_multiplier, FilterResult, MLHandle, MediaInfo,
+    has_hashtags, has_keywords, label_boost, FilterResult, MLHandle, MediaInfo,
     PrioritySignals,
 };
 use devlogs_feed::utils::bluesky::{fetch_post, parse_bluesky_url};
@@ -121,9 +121,10 @@ async fn score_post(text: &str, media: &MediaInfo, ml_handle: &MLHandle) {
 
     let signals = PrioritySignals {
         topic_label: scores.best_label.clone(),
-        label_multiplier: label_multiplier(&scores.best_label),
+        label_boost: label_boost(&scores.best_label),
         engagement_bait_score: scores.quality.engagement_bait_score,
         synthetic_score: scores.quality.synthetic_score,
+        authenticity_score: scores.quality.authenticity_score,
         is_first_person: content.is_first_person,
         images: content.images,
         has_video: content.has_video,

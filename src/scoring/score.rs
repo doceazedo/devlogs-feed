@@ -1,5 +1,5 @@
-pub const WEIGHT_CLASSIFICATION: f32 = 0.8;
-pub const WEIGHT_SEMANTIC: f32 = 0.20;
+pub const TOPIC_WEIGHT: f32 = 0.8;
+pub const SEMANTIC_WEIGHT: f32 = 0.20;
 pub const SCORE_THRESHOLD: f32 = 0.50;
 
 #[derive(Debug, Clone, Default)]
@@ -17,7 +17,7 @@ impl ScoreBreakdown {
 
 pub fn calculate_score(classification_score: f32, semantic_score: f32) -> ScoreBreakdown {
     let final_score =
-        classification_score * WEIGHT_CLASSIFICATION + semantic_score * WEIGHT_SEMANTIC;
+        classification_score * TOPIC_WEIGHT + semantic_score * SEMANTIC_WEIGHT;
 
     ScoreBreakdown {
         classification_score,
@@ -33,7 +33,7 @@ mod tests {
     #[test]
     fn test_score_calculation() {
         let score = calculate_score(1.0, 1.0);
-        let expected = WEIGHT_CLASSIFICATION + WEIGHT_SEMANTIC;
+        let expected = TOPIC_WEIGHT + SEMANTIC_WEIGHT;
         assert!((score.final_score - expected).abs() < 0.01);
     }
 
