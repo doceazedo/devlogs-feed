@@ -1,4 +1,9 @@
-use crate::db::{self, get_post_author, DbPool, NewLike, NewPost};
+use crate::db::{
+    self, get_post_author, get_user_preferences, get_user_seen_posts, insert_interactions, DbPool,
+    NewInteraction, NewLike, NewPost, INTERACTION_REQUEST_LESS, INTERACTION_REQUEST_MORE,
+    INTERACTION_SEEN,
+};
+use std::collections::HashSet;
 use crate::engagement::EngagementTracker;
 use crate::scoring::{
     apply_filters, apply_ml_filter, apply_time_decay, calculate_priority, calculate_score,
@@ -8,7 +13,9 @@ use crate::scoring::{
 use crate::utils::logs::{self, PostAssessment};
 use chrono::Utc;
 use rand::Rng;
-use skyfeed::{Embed, FeedHandler, FeedRequest, FeedResult, Post, Uri};
+use skyfeed::{
+    Did, Embed, FeedHandler, FeedRequest, FeedResult, Interaction, InteractionEvent, Post, Uri,
+};
 use std::cmp::Ordering;
 
 pub const FEED_CUTOFF_HOURS: i64 = 96;
@@ -16,6 +23,8 @@ pub const FEED_DEFAULT_LIMIT: usize = 50;
 pub const FEED_MAX_LIMIT: usize = 500;
 pub const MAX_STORED_POSTS: i64 = 5000;
 pub const SHUFFLE_VARIANCE: f32 = 0.05;
+pub const PREFERENCE_BOOST: f32 = 1.5;
+pub const PREFERENCE_PENALTY: f32 = 0.3;
 
 #[derive(Clone)]
 pub struct GameDevFeedHandler {
@@ -315,6 +324,33 @@ impl FeedHandler for GameDevFeedHandler {
             }
         };
 
+        let seen_posts: HashSet<String> = request
+            .user_did
+            .as_ref()
+            .and_then(|did| get_user_seen_posts(&mut conn, &did.0, cutoff).ok())
+            .map(|posts| posts.into_iter().collect())
+            .unwrap_or_default();
+
+        let (boosted_authors, penalized_authors): (HashSet<String>, HashSet<String>) = request
+            .user_did
+            .as_ref()
+            .and_then(|did| get_user_preferences(&mut conn, &did.0).ok())
+            .map(|prefs| {
+                let mut boosted = HashSet::new();
+                let mut penalized = HashSet::new();
+                for pref in prefs {
+                    if let Some(author) = get_post_author(&mut conn, &pref.post_uri) {
+                        if pref.is_request_more {
+                            boosted.insert(author);
+                        } else {
+                            penalized.insert(author);
+                        }
+                    }
+                }
+                (boosted, penalized)
+            })
+            .unwrap_or_default();
+
         let start_index = request
             .cursor
             .as_ref()
@@ -330,15 +366,27 @@ impl FeedHandler for GameDevFeedHandler {
 
         let mut scored_posts: Vec<_> = posts
             .iter()
+            .filter(|p| !seen_posts.contains(&p.uri))
             .map(|p| {
                 let post_time = chrono::DateTime::from_timestamp(p.timestamp, 0).unwrap_or(now);
                 let base_score = apply_time_decay(p.priority, post_time, now);
 
-                // let velocity = self.engagement.get_velocity(&p.uri);
-                // let engagement_boost = (velocity.ln_1p() * 0.1).min(0.5);
+                let preference_modifier = p
+                    .author_did
+                    .as_ref()
+                    .map(|author| {
+                        if boosted_authors.contains(author) {
+                            PREFERENCE_BOOST
+                        } else if penalized_authors.contains(author) {
+                            PREFERENCE_PENALTY
+                        } else {
+                            1.0
+                        }
+                    })
+                    .unwrap_or(1.0);
 
                 let variance = rng.random_range(-SHUFFLE_VARIANCE..SHUFFLE_VARIANCE);
-                let final_score = base_score * (1.0 + variance);
+                let final_score = base_score * preference_modifier * (1.0 + variance);
 
                 (p, final_score)
             })
@@ -352,8 +400,8 @@ impl FeedHandler for GameDevFeedHandler {
             .take(limit)
             .collect();
 
-        let total_count = posts.len();
-        let next_cursor = if start_index + limit < total_count {
+        let filtered_count = posts.len() - seen_posts.len().min(posts.len());
+        let next_cursor = if start_index + limit < filtered_count {
             Some((start_index + limit).to_string())
         } else {
             None
@@ -366,6 +414,37 @@ impl FeedHandler for GameDevFeedHandler {
         FeedResult {
             cursor: next_cursor,
             feed,
+        }
+    }
+
+    async fn handle_interactions(&self, user_did: Did, interactions: Vec<Interaction>) {
+        logs::log_interactions_received(&user_did.0, interactions.len());
+
+        let now = Utc::now().timestamp();
+        let mut db_interactions = Vec::new();
+
+        for interaction in interactions {
+            let interaction_type = match interaction.event {
+                InteractionEvent::RequestLess => Some(INTERACTION_REQUEST_LESS),
+                InteractionEvent::RequestMore => Some(INTERACTION_REQUEST_MORE),
+                InteractionEvent::InteractionSeen => Some(INTERACTION_SEEN),
+                _ => None,
+            };
+
+            if let Some(itype) = interaction_type {
+                db_interactions.push(NewInteraction {
+                    user_did: user_did.0.clone(),
+                    post_uri: interaction.item.0,
+                    interaction_type: itype.to_string(),
+                    created_at: now,
+                });
+            }
+        }
+
+        if !db_interactions.is_empty() {
+            if let Ok(mut conn) = self.pool.get() {
+                let _ = insert_interactions(&mut conn, db_interactions);
+            }
         }
     }
 }

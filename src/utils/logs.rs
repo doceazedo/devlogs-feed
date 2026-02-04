@@ -659,6 +659,20 @@ pub fn log_flush(posts: usize, likes: usize) {
     }
 }
 
+pub fn log_interactions_received(user_did: &str, count: usize) {
+    let truncated_did = if user_did.len() > 24 {
+        format!("{}...", &user_did[..21])
+    } else {
+        user_did.to_string()
+    };
+    println!(
+        "{} {} interactions from {}",
+        cyan().apply_to("received"),
+        bold().apply_to(count),
+        dim().apply_to(truncated_did)
+    );
+}
+
 fn truncate_uri(uri: &str) -> String {
     if let Some(rkey_start) = uri.rfind('/') {
         let rkey = &uri[rkey_start + 1..];

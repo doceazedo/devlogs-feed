@@ -3315,13 +3315,14 @@ checksum = "b2aa850e253778c88a04c3d7323b043aeda9d3e30d5971937c1855769763678e"
 [[package]]
 name = "skyfeed"
 version = "0.6.0"
-source = "git+https://github.com/doceazedo/skyfeed?branch=add-reply-support#a708415a12e9aac596f3e8f7d5b63dc1568c50a6"
+source = "git+https://github.com/doceazedo/skyfeed?branch=interactions#0c314c32cd14e1194516d98d96c4c0b929cd76b5"
 dependencies = [
  "anyhow",
  "async-trait",
  "atrium-api",
  "atrium-repo",
  "atrium-xrpc-client",
+ "base64 0.22.1",
  "chrono",
  "chrono-tz",
  "clap",

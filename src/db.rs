@@ -1,4 +1,4 @@
-use crate::schema::{likes, posts};
+use crate::schema::{likes, posts, user_interactions};
 use diesel::connection::SimpleConnection;
 use diesel::prelude::*;
 use diesel::r2d2::{ConnectionManager, Pool};
@@ -182,4 +182,98 @@ pub fn cleanup_old_posts(
     }
 
     Ok(deleted_by_age + deleted_by_limit)
+}
+
+#[derive(Insertable, Debug, Clone)]
+#[diesel(table_name = user_interactions)]
+pub struct NewInteraction {
+    pub user_did: String,
+    pub post_uri: String,
+    pub interaction_type: String,
+    pub created_at: i64,
+}
+
+pub const INTERACTION_SEEN: &str = "seen";
+pub const INTERACTION_REQUEST_LESS: &str = "request_less";
+pub const INTERACTION_REQUEST_MORE: &str = "request_more";
+
+pub fn insert_interaction(
+    conn: &mut SqliteConnection,
+    interaction: NewInteraction,
+) -> QueryResult<usize> {
+    use crate::schema::user_interactions::dsl::*;
+
+    diesel::insert_or_ignore_into(user_interactions)
+        .values(&interaction)
+        .execute(conn)
+}
+
+pub fn insert_interactions(
+    conn: &mut SqliteConnection,
+    interactions: Vec<NewInteraction>,
+) -> QueryResult<usize> {
+    use crate::schema::user_interactions::dsl::*;
+
+    if interactions.is_empty() {
+        return Ok(0);
+    }
+
+    diesel::insert_or_ignore_into(user_interactions)
+        .values(&interactions)
+        .execute(conn)
+}
+
+pub fn get_user_seen_posts(
+    conn: &mut SqliteConnection,
+    did: &str,
+    cutoff_timestamp: i64,
+) -> QueryResult<Vec<String>> {
+    use crate::schema::user_interactions::dsl::*;
+
+    user_interactions
+        .filter(user_did.eq(did))
+        .filter(interaction_type.eq(INTERACTION_SEEN))
+        .filter(created_at.gt(cutoff_timestamp))
+        .select(post_uri)
+        .load(conn)
+}
+
+#[derive(Debug, Clone)]
+pub struct UserPreference {
+    pub post_uri: String,
+    pub is_request_more: bool,
+}
+
+pub fn get_user_preferences(
+    conn: &mut SqliteConnection,
+    did: &str,
+) -> QueryResult<Vec<UserPreference>> {
+    use crate::schema::user_interactions::dsl::*;
+
+    let results: Vec<(String, String)> = user_interactions
+        .filter(user_did.eq(did))
+        .filter(
+            interaction_type
+                .eq(INTERACTION_REQUEST_LESS)
+                .or(interaction_type.eq(INTERACTION_REQUEST_MORE)),
+        )
+        .select((post_uri, interaction_type))
+        .load(conn)?;
+
+    Ok(results
+        .into_iter()
+        .map(|(uri, itype)| UserPreference {
+            post_uri: uri,
+            is_request_more: itype == INTERACTION_REQUEST_MORE,
+        })
+        .collect())
+}
+
+pub fn cleanup_old_interactions(
+    conn: &mut SqliteConnection,
+    cutoff_timestamp: i64,
+) -> QueryResult<usize> {
+    use crate::schema::user_interactions::dsl::*;
+
+    diesel::delete(user_interactions.filter(created_at.lt(cutoff_timestamp))).execute(conn)
 }

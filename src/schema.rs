@@ -69,6 +69,15 @@ diesel::table! {
     }
 }
 
+diesel::table! {
+    user_interactions (user_did, post_uri, interaction_type) {
+        user_did -> Text,
+        post_uri -> Text,
+        interaction_type -> Text,
+        created_at -> BigInt,
+    }
+}
+
 diesel::joinable!(engagement_cache -> posts (post_uri));
 diesel::joinable!(likes -> posts (post_uri));
 diesel::joinable!(replies -> posts (post_uri));
@@ -81,4 +90,5 @@ diesel::allow_tables_to_appear_in_same_query!(
     replies,
     reposts,
     spammers,
+    user_interactions,
 );
