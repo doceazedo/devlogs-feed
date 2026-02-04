@@ -98,8 +98,8 @@ pub async fn evaluate_post(text: &str, media: MediaInfo, ml_handle: &MLHandle) -
     }
 }
 
-pub const DECAY_EVERY_X_HOURS: f32 = 6.0;
-pub const DECAY_FACTOR: f32 = 0.95;
+pub const DECAY_EVERY_X_HOURS: f32 = 2.0;
+pub const DECAY_FACTOR: f32 = 0.75;
 
 pub fn apply_time_decay(score: f32, post_time: DateTime<Utc>, now: DateTime<Utc>) -> f32 {
     let hours_old = (now - post_time).num_seconds() as f32 / 3600.0;

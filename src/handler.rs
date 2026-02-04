@@ -18,7 +18,7 @@ use skyfeed::{
 };
 use std::cmp::Ordering;
 
-pub const FEED_CUTOFF_HOURS: i64 = 96;
+pub const FEED_CUTOFF_HOURS: i64 = 24 * 7;
 pub const FEED_DEFAULT_LIMIT: usize = 50;
 pub const FEED_MAX_LIMIT: usize = 500;
 pub const MAX_STORED_POSTS: i64 = 5000;
