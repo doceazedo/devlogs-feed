@@ -15,6 +15,8 @@ pub const ML_BATCH_TIMEOUT_MS: u64 = 10;
 pub enum TopicLabel {
     #[strum(to_string = "game developer sharing their own work")]
     GameDevSharingWork,
+    #[strum(to_string = "game development rant")]
+    GameDevRant,
     #[strum(to_string = "game programming or technical development")]
     GameProgramming,
     #[strum(to_string = "marketing or promotional content")]
@@ -39,7 +41,8 @@ impl TopicLabel {
 
     pub fn boost(&self) -> f32 {
         match self {
-            Self::GameDevSharingWork => 0.6,
+            Self::GameDevSharingWork => 0.4,
+            Self::GameDevRant => 0.6,
             Self::GameProgramming => 0.2,
             _ => 0.0,
         }

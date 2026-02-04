@@ -6,10 +6,10 @@ pub const POOR_QUALITY_PENALTY_MIN: f32 = 0.5;
 pub const GOOD_QUALITY_BOOST_MIN: f32 = 0.1;
 pub const ENGAGEMENT_BOOST_MIN: f32 = 0.05;
 
-pub const BONUS_FIRST_PERSON: f32 = 0.4;
-pub const BONUS_VIDEO: f32 = 0.2;
-pub const BONUS_IMAGE_WITH_ALT: f32 = 0.2;
-pub const PENALTY_MANY_IMAGES: f32 = 0.6;
+pub const BONUS_FIRST_PERSON: f32 = 0.2;
+pub const BONUS_VIDEO: f32 = 0.1;
+pub const BONUS_IMAGE_WITH_ALT: f32 = 0.1;
+pub const PENALTY_MANY_IMAGES: f32 = 0.2;
 pub const PENALTY_LINK_EXPO: f32 = 3.0;
 pub const PENALTY_PROMO_LINK: f32 = 1.5;
 
