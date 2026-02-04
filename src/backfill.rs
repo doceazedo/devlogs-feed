@@ -76,6 +76,10 @@ pub async fn run_backfill(pool: DbPool, ml_handle: &MLHandle) {
             continue;
         }
 
+        if post.record.reply.is_some() {
+            continue;
+        }
+
         let timestamp = chrono::DateTime::parse_from_rfc3339(&post.indexed_at)
             .map(|dt| dt.timestamp())
             .unwrap_or_else(|_| Utc::now().timestamp());

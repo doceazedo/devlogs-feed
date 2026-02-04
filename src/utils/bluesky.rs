@@ -217,6 +217,7 @@ pub struct SearchRecord {
     pub text: String,
     pub langs: Option<Vec<String>>,
     pub facets: Option<Vec<Facet>>,
+    pub reply: Option<serde_json::Value>,
 }
 
 pub async fn create_session(client: &reqwest::Client) -> Result<String, String> {
