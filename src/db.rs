@@ -197,17 +197,6 @@ pub const INTERACTION_SEEN: &str = "seen";
 pub const INTERACTION_REQUEST_LESS: &str = "request_less";
 pub const INTERACTION_REQUEST_MORE: &str = "request_more";
 
-pub fn insert_interaction(
-    conn: &mut SqliteConnection,
-    interaction: NewInteraction,
-) -> QueryResult<usize> {
-    use crate::schema::user_interactions::dsl::*;
-
-    diesel::insert_or_ignore_into(user_interactions)
-        .values(&interaction)
-        .execute(conn)
-}
-
 pub fn insert_interactions(
     conn: &mut SqliteConnection,
     interactions: Vec<NewInteraction>,
@@ -267,13 +256,4 @@ pub fn get_user_preferences(
             is_request_more: itype == INTERACTION_REQUEST_MORE,
         })
         .collect())
-}
-
-pub fn cleanup_old_interactions(
-    conn: &mut SqliteConnection,
-    cutoff_timestamp: i64,
-) -> QueryResult<usize> {
-    use crate::schema::user_interactions::dsl::*;
-
-    diesel::delete(user_interactions.filter(created_at.lt(cutoff_timestamp))).execute(conn)
 }
