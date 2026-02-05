@@ -119,6 +119,7 @@ pub struct Spam {
 pub struct Backfill {
     pub limit: usize,
     pub hours: i64,
+    pub search_limit: u32,
 }
 
 impl Default for Settings {
@@ -184,6 +185,7 @@ impl Default for Settings {
             backfill: Backfill {
                 limit: 200,
                 hours: 96,
+                search_limit: 50,
             },
             filters: Filters {
                 gamedev_keywords: vec![

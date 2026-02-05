@@ -8,8 +8,6 @@ use crate::utils::bluesky::{create_session, extract_facet_links, search_posts, S
 use crate::utils::logs::{self, PostAssessment};
 use chrono::Utc;
 
-const SEARCH_LIMIT: u32 = 50;
-
 pub async fn run_backfill(pool: DbPool, ml_handle: &MLHandle) {
     let s = settings();
     logs::log_backfill_start();
@@ -32,7 +30,15 @@ pub async fn run_backfill(pool: DbPool, ml_handle: &MLHandle) {
     let mut all_posts: Vec<SearchPost> = Vec::new();
 
     for query in &search_queries {
-        match search_posts(&client, &access_token, query, SEARCH_LIMIT, Some(&since)).await {
+        match search_posts(
+            &client,
+            &access_token,
+            query,
+            s.backfill.search_limit,
+            Some(&since),
+        )
+        .await
+        {
             Ok(posts) => {
                 logs::log_backfill_query(query, posts.len());
                 all_posts.extend(posts);

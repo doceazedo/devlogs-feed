@@ -59,6 +59,7 @@ Settings(
     backfill: Backfill(
         limit: 200,
         hours: 96,
+        search_limit: 50,
     ),
     filters: Filters(
         gamedev_keywords: [
