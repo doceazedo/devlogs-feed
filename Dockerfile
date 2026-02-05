@@ -39,6 +39,7 @@ COPY --from=builder /app/target/release/score-post .
 COPY --from=builder /usr/local/cargo/bin/diesel .
 COPY --from=builder /app/libtorch /usr/lib/
 COPY migrations ./migrations/
+COPY diesel.toml ./
 
 ENV RUST_LOG=info
 ENV LD_LIBRARY_PATH=/usr/lib
@@ -46,4 +47,4 @@ ENV PORT=3030
 
 EXPOSE ${PORT}
 
-CMD ["sh", "-c", "./diesel migration run && ./devlogs-feed"]
+CMD ["sh", "-c", "./diesel setup && ./diesel migration run && ./devlogs-feed"]
