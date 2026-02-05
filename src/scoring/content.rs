@@ -135,8 +135,9 @@ mod tests {
 
     #[test]
     fn test_is_promo_domain() {
-        assert!(is_promo_domain("https://store.steampowered.com/app/123"));
-        assert!(is_promo_domain("https://itch.io/game/test"));
+        assert!(is_promo_domain("https://store.steampowered.com/app/420"));
+        assert!(is_promo_domain("https://itch.io"));
+        assert!(is_promo_domain("https://doceazedo.itch.io/"));
         assert!(is_promo_domain("https://twitch.tv/channel"));
         assert!(is_promo_domain("https://kickstarter.com/project"));
         assert!(!is_promo_domain("https://example.com"));
