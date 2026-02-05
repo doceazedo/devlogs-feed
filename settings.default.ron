@@ -169,5 +169,7 @@ Settings(
             "buff.ly",
             "bit.ly",
         ],
+        moderator_dids: [],
+        influencer_dids: [],
     ),
 )

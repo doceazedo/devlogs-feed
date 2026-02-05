@@ -1,4 +1,4 @@
-use crate::schema::{likes, posts, user_interactions};
+use crate::schema::{blocked_authors, likes, posts, user_interactions};
 use crate::scoring::{ContentSignals, MediaInfo};
 use diesel::connection::SimpleConnection;
 use diesel::prelude::*;
@@ -273,4 +273,33 @@ pub fn get_user_preferences(
             is_request_more: itype == INTERACTION_REQUEST_MORE,
         })
         .collect())
+}
+
+#[derive(Insertable, Debug, Clone)]
+#[diesel(table_name = blocked_authors)]
+pub struct NewBlockedAuthor {
+    pub did: String,
+    pub post_uri: String,
+    pub blocked_at: i64,
+}
+
+pub fn is_blocked_author(conn: &mut SqliteConnection, author_did: &str) -> bool {
+    blocked_authors::table
+        .filter(blocked_authors::did.eq(author_did))
+        .count()
+        .get_result::<i64>(conn)
+        .unwrap_or(0)
+        > 0
+}
+
+pub fn block_author(conn: &mut SqliteConnection, blocked: NewBlockedAuthor) -> QueryResult<usize> {
+    diesel::insert_or_ignore_into(blocked_authors::table)
+        .values(&blocked)
+        .execute(conn)
+}
+
+pub fn delete_posts_by_author(conn: &mut SqliteConnection, did: &str) -> QueryResult<usize> {
+    use crate::schema::posts::dsl::*;
+
+    diesel::delete(posts.filter(author_did.eq(did))).execute(conn)
 }

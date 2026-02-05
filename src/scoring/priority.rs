@@ -260,7 +260,6 @@ mod tests {
             .penalty_reasons
             .iter()
             .any(|r| r.contains("links")));
-
     }
 
     #[test]

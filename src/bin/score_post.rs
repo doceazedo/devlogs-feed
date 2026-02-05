@@ -84,7 +84,7 @@ async fn main() {
 async fn score_post(text: &str, media: &MediaInfo, ml_handle: &MLHandle) {
     let mut assessment = PostAssessment::new(text);
 
-    let filter_result = apply_filters(text, Some("en"), None, media, |_| false);
+    let filter_result = apply_filters(text, Some("en"), None, media, |_| false, |_| false);
     assessment.set_filter_result(filter_result.clone());
     if let FilterResult::Reject(_) = &filter_result {
         assessment.print();
@@ -119,13 +119,11 @@ mod tests {
     };
     use devlogs_feed::utils::bluesky::{fetch_post, parse_bluesky_url};
 
-    const POSTS_EXPECTED_ACCEPT: &[&str] = &[
-        "at://did:plc:uthii4i7zrmqnbxex5esjxzp/app.bsky.feed.post/3maqv5l6xl22y",
-    ];
+    const POSTS_EXPECTED_ACCEPT: &[&str] =
+        &["at://did:plc:uthii4i7zrmqnbxex5esjxzp/app.bsky.feed.post/3maqv5l6xl22y"];
 
-    const POSTS_EXPECTED_REJECT: &[&str] = &[
-        "at://did:plc:jguiyddnwoie7ddpfjsgacbk/app.bsky.feed.post/3mdt3m3fq422g",
-    ];
+    const POSTS_EXPECTED_REJECT: &[&str] =
+        &["at://did:plc:jguiyddnwoie7ddpfjsgacbk/app.bsky.feed.post/3mdt3m3fq422g"];
 
     async fn evaluate_url(url: &str, ml_handle: &MLHandle) -> bool {
         let at_uri = parse_bluesky_url(url).expect("Invalid URL format");
@@ -141,7 +139,8 @@ mod tests {
             facet_links: post.facet_links.clone(),
         };
 
-        let filter_result = apply_filters(&post.text, Some("en"), None, &media, |_| false);
+        let filter_result =
+            apply_filters(&post.text, Some("en"), None, &media, |_| false, |_| false);
         if matches!(filter_result, FilterResult::Reject(_)) {
             return false;
         }

@@ -24,6 +24,8 @@ pub struct Filters {
     pub blocked_keywords: Vec<String>,
     pub blocked_hashtags: Vec<String>,
     pub promo_domains: Vec<String>,
+    pub moderator_dids: Vec<String>,
+    pub influencer_dids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -292,6 +294,8 @@ impl Default for Settings {
                     "buff.ly".into(),
                     "bit.ly".into(),
                 ],
+                moderator_dids: vec![],
+                influencer_dids: vec![],
             },
         }
     }

@@ -1,6 +1,14 @@
 // @generated automatically by Diesel CLI.
 
 diesel::table! {
+    blocked_authors (did) {
+        did -> Text,
+        post_uri -> Text,
+        blocked_at -> BigInt,
+    }
+}
+
+diesel::table! {
     engagement_cache (post_uri) {
         post_uri -> Text,
         reply_count -> Integer,
@@ -77,6 +85,7 @@ diesel::joinable!(replies -> posts (post_uri));
 diesel::joinable!(reposts -> posts (post_uri));
 
 diesel::allow_tables_to_appear_in_same_query!(
+    blocked_authors,
     engagement_cache,
     likes,
     posts,

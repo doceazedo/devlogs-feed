@@ -1,7 +1,7 @@
 use crate::db::{
-    self, get_post_author, get_user_preferences, get_user_seen_posts, insert_interactions, DbPool,
-    NewInteraction, NewLike, NewPost, INTERACTION_REQUEST_LESS, INTERACTION_REQUEST_MORE,
-    INTERACTION_SEEN,
+    self, block_author, delete_posts_by_author, get_post_author, get_user_preferences,
+    get_user_seen_posts, insert_interactions, DbPool, NewBlockedAuthor, NewInteraction, NewLike,
+    NewPost, INTERACTION_REQUEST_LESS, INTERACTION_REQUEST_MORE, INTERACTION_SEEN,
 };
 use crate::engagement::EngagementTracker;
 use crate::scoring::{
@@ -95,6 +95,14 @@ impl GameDevFeedHandler {
         self.engagement.is_spammer(did)
     }
 
+    fn is_blocked_author(&self, did: &str) -> bool {
+        let mut conn = match self.pool.get() {
+            Ok(c) => c,
+            Err(_) => return false,
+        };
+        db::is_blocked_author(&mut conn, did)
+    }
+
     pub fn flush_pending(&mut self) -> Result<(), diesel::result::Error> {
         if self.pending_posts.is_empty()
             && self.pending_likes.is_empty()
@@ -177,22 +185,33 @@ impl FeedHandler for GameDevFeedHandler {
 
         let media_info = Self::extract_media_info(&post);
 
-        let filter_result =
-            apply_filters(text, lang, Some(author_did), &media_info, |did| {
-                self.is_spammer(did)
-            });
+        let filter_result = apply_filters(
+            text,
+            lang,
+            Some(author_did),
+            &media_info,
+            |did| self.is_spammer(did),
+            |did| self.is_blocked_author(did),
+        );
         assessment.set_filter_result(filter_result.clone());
 
         if let FilterResult::Reject(_) = filter_result {
             return;
         }
 
+        let s = settings();
+        let is_influencer = s.filters.influencer_dids.contains(&author_did.to_string());
+
         let (found_keywords, _keyword_count) = has_keywords(text);
         let (found_hashtags, _hashtag_count) = has_hashtags(text);
         assessment.set_relevance(found_keywords, found_hashtags);
 
-        if !found_keywords && !found_hashtags {
+        if !found_keywords && !found_hashtags && !is_influencer {
             return;
+        }
+
+        if is_influencer && !found_keywords && !found_hashtags {
+            logs::log_influencer_accepted(author_did);
         }
 
         let quality = self.ml_handle.score(text.clone()).await;
@@ -367,10 +386,12 @@ impl FeedHandler for GameDevFeedHandler {
     async fn handle_interactions(&self, user_did: Did, interactions: Vec<Interaction>) {
         logs::log_interactions_received(&user_did.0, interactions.len());
 
+        let s = settings();
+        let is_moderator = s.filters.moderator_dids.contains(&user_did.0);
         let now = Utc::now().timestamp();
         let mut db_interactions = Vec::new();
 
-        for interaction in interactions {
+        for interaction in &interactions {
             let interaction_type = match interaction.event {
                 InteractionEvent::RequestLess => Some(INTERACTION_REQUEST_LESS),
                 InteractionEvent::RequestMore => Some(INTERACTION_REQUEST_MORE),
@@ -381,16 +402,37 @@ impl FeedHandler for GameDevFeedHandler {
             if let Some(itype) = interaction_type {
                 db_interactions.push(NewInteraction {
                     user_did: user_did.0.clone(),
-                    post_uri: interaction.item.0,
+                    post_uri: interaction.item.0.clone(),
                     interaction_type: itype.to_string(),
                     created_at: now,
                 });
             }
         }
 
-        if !db_interactions.is_empty() {
-            if let Ok(mut conn) = self.pool.get() {
+        if let Ok(mut conn) = self.pool.get() {
+            if !db_interactions.is_empty() {
                 let _ = insert_interactions(&mut conn, db_interactions);
+            }
+
+            if is_moderator {
+                for interaction in &interactions {
+                    if !matches!(interaction.event, InteractionEvent::RequestLess) {
+                        continue;
+                    }
+
+                    if let Some(author) = get_post_author(&mut conn, &interaction.item.0) {
+                        let _ = block_author(
+                            &mut conn,
+                            NewBlockedAuthor {
+                                did: author.clone(),
+                                post_uri: interaction.item.0.clone(),
+                                blocked_at: now,
+                            },
+                        );
+                        let deleted = delete_posts_by_author(&mut conn, &author).unwrap_or(0);
+                        logs::log_author_blocked(&user_did.0, &author, deleted);
+                    }
+                }
             }
         }
     }

@@ -540,17 +540,38 @@ pub fn log_flush(posts: usize, likes: usize) {
     }
 }
 
-pub fn log_interactions_received(user_did: &str, count: usize) {
-    let truncated_did = if user_did.len() > 24 {
-        format!("{}...", &user_did[..21])
+pub fn log_author_blocked(moderator_did: &str, author_did: &str, deleted_posts: usize) {
+    println!(
+        "{} {} blocked author {} ({} posts removed)",
+        red().apply_to("[MOD]"),
+        dim().apply_to(truncate_did(moderator_did)),
+        bold().apply_to(truncate_did(author_did)),
+        bold().apply_to(deleted_posts)
+    );
+}
+
+pub fn log_influencer_accepted(author_did: &str) {
+    println!(
+        "{} post from {} (influencer bypass)",
+        green().apply_to("accepted"),
+        dim().apply_to(truncate_did(author_did))
+    );
+}
+
+fn truncate_did(did: &str) -> String {
+    if did.len() > 24 {
+        format!("{}...", &did[..21])
     } else {
-        user_did.to_string()
-    };
+        did.to_string()
+    }
+}
+
+pub fn log_interactions_received(user_did: &str, count: usize) {
     println!(
         "{} {} interactions from {}",
         cyan().apply_to("received"),
         bold().apply_to(count),
-        dim().apply_to(truncated_did)
+        dim().apply_to(truncate_did(user_did))
     );
 }
 

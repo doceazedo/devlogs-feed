@@ -21,6 +21,8 @@ pub enum Filter {
     BlockedHashtag(String),
     #[strum(serialize = "spammer")]
     Spammer,
+    #[strum(serialize = "blocked-author")]
+    BlockedAuthor,
     #[strum(serialize = "promo-link")]
     PromoLink,
     #[strum(serialize = "too-many-hashtags")]
@@ -34,7 +36,8 @@ pub fn apply_filters(
     lang: Option<&str>,
     author_did: Option<&str>,
     media: &MediaInfo,
-    spammer_check: impl Fn(&str) -> bool,
+    mut spammer_check: impl FnMut(&str) -> bool,
+    mut blocked_author_check: impl FnMut(&str) -> bool,
 ) -> FilterResult {
     let s = settings();
     let stripped = strip_hashtags(text);
@@ -63,6 +66,9 @@ pub fn apply_filters(
     }
 
     if let Some(did) = author_did {
+        if blocked_author_check(did) {
+            return FilterResult::Reject(Filter::BlockedAuthor);
+        }
         if spammer_check(did) {
             return FilterResult::Reject(Filter::Spammer);
         }
@@ -93,30 +99,34 @@ mod tests {
         false
     }
 
+    fn no_blocked(_: &str) -> bool {
+        false
+    }
+
     fn no_media() -> MediaInfo {
         MediaInfo::default()
     }
 
     #[test]
     fn test_filter_min_length() {
-        let result = apply_filters("hi", Some("en"), None, &no_media(), no_spammer);
+        let result = apply_filters("hi", Some("en"), None, &no_media(), no_spammer, no_blocked);
         assert_eq!(result, FilterResult::Reject(Filter::MinLength));
     }
 
     #[test]
     fn test_filter_english_only() {
         let text = "This is a long enough text for testing purposes";
-        let result = apply_filters(text, Some("pt"), None, &no_media(), no_spammer);
+        let result = apply_filters(text, Some("pt"), None, &no_media(), no_spammer, no_blocked);
         assert_eq!(result, FilterResult::Reject(Filter::EnglishOnly));
 
-        let result_en = apply_filters(text, Some("en"), None, &no_media(), no_spammer);
+        let result_en = apply_filters(text, Some("en"), None, &no_media(), no_spammer, no_blocked);
         assert_eq!(result_en, FilterResult::Pass);
     }
 
     #[test]
     fn test_filter_blocked_keyword() {
         let text = "Check out my new NFT game collection";
-        let result = apply_filters(text, Some("en"), None, &no_media(), no_spammer);
+        let result = apply_filters(text, Some("en"), None, &no_media(), no_spammer, no_blocked);
         assert!(matches!(
             result,
             FilterResult::Reject(Filter::BlockedKeyword(_))
@@ -144,8 +154,24 @@ mod tests {
             Some("did:plc:spammer123"),
             &no_media(),
             is_spammer,
+            no_blocked,
         );
         assert_eq!(result, FilterResult::Reject(Filter::Spammer));
+    }
+
+    #[test]
+    fn test_filter_blocked_author() {
+        let text = "This is a valid gamedev post about my project";
+        let is_blocked = |did: &str| did == "did:plc:blocked456";
+        let result = apply_filters(
+            text,
+            Some("en"),
+            Some("did:plc:blocked456"),
+            &no_media(),
+            no_spammer,
+            is_blocked,
+        );
+        assert_eq!(result, FilterResult::Reject(Filter::BlockedAuthor));
     }
 
     #[test]
@@ -155,7 +181,7 @@ mod tests {
             external_uri: Some("https://store.steampowered.com/app/12345".to_string()),
             ..Default::default()
         };
-        let result = apply_filters(text, Some("en"), None, &media, no_spammer);
+        let result = apply_filters(text, Some("en"), None, &media, no_spammer, no_blocked);
         assert_eq!(result, FilterResult::Reject(Filter::PromoLink));
     }
 
@@ -166,14 +192,14 @@ mod tests {
             facet_links: vec!["https://itch.io/game/test".to_string()],
             ..Default::default()
         };
-        let result = apply_filters(text, Some("en"), None, &media, no_spammer);
+        let result = apply_filters(text, Some("en"), None, &media, no_spammer, no_blocked);
         assert_eq!(result, FilterResult::Reject(Filter::PromoLink));
     }
 
     #[test]
     fn test_filter_too_many_hashtags() {
         let text = "My game #one #two #three #four #five #six #seven is great";
-        let result = apply_filters(text, Some("en"), None, &no_media(), no_spammer);
+        let result = apply_filters(text, Some("en"), None, &no_media(), no_spammer, no_blocked);
         assert!(matches!(
             result,
             FilterResult::Reject(Filter::TooManyHashtags(7))
@@ -183,14 +209,14 @@ mod tests {
     #[test]
     fn test_filter_hashtags_at_limit() {
         let text = "My game #one #two #three #four #five #six is great";
-        let result = apply_filters(text, Some("en"), None, &no_media(), no_spammer);
+        let result = apply_filters(text, Some("en"), None, &no_media(), no_spammer, no_blocked);
         assert_eq!(result, FilterResult::Pass);
     }
 
     #[test]
     fn test_filter_pass() {
         let text = "Just implemented a new combat system in my game #gamedev";
-        let result = apply_filters(text, Some("en"), None, &no_media(), no_spammer);
+        let result = apply_filters(text, Some("en"), None, &no_media(), no_spammer, no_blocked);
         assert_eq!(result, FilterResult::Pass);
     }
 }

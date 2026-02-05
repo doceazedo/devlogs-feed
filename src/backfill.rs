@@ -1,4 +1,4 @@
-use crate::db::{self, DbPool, NewPost};
+use crate::db::{self, is_blocked_author, DbPool, NewPost};
 use crate::scoring::{
     apply_filters, calculate_priority, extract_content_signals, has_hashtags, has_keywords,
     FilterResult, MLHandle, MediaInfo, PrioritySignals,
@@ -97,18 +97,26 @@ pub async fn run_backfill(pool: DbPool, ml_handle: &MLHandle) {
         let mut media_info = extract_media_from_embed(&post.embed);
         media_info.facet_links = extract_facet_links(&post.record.facets);
 
-        let filter_result =
-            apply_filters(text, lang, Some(&post.author.did), &media_info, |_| false);
+        let filter_result = apply_filters(
+            text,
+            lang,
+            Some(&post.author.did),
+            &media_info,
+            |_| false,
+            |did| is_blocked_author(&mut conn, did),
+        );
         assessment.set_filter_result(filter_result.clone());
         if matches!(filter_result, FilterResult::Reject(_)) {
             filtered += 1;
             continue;
         }
 
+        let is_influencer = s.filters.influencer_dids.contains(&post.author.did);
+
         let (found_keywords, _) = has_keywords(text);
         let (found_hashtags, _) = has_hashtags(text);
         assessment.set_relevance(found_keywords, found_hashtags);
-        if !found_keywords && !found_hashtags {
+        if !found_keywords && !found_hashtags && !is_influencer {
             no_relevance += 1;
             continue;
         }
