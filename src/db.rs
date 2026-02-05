@@ -1,4 +1,5 @@
 use crate::schema::{likes, posts, user_interactions};
+use crate::scoring::{ContentSignals, MediaInfo};
 use diesel::connection::SimpleConnection;
 use diesel::prelude::*;
 use diesel::r2d2::{ConnectionManager, Pool};
@@ -29,14 +30,7 @@ pub struct Post {
     pub uri: String,
     pub text: String,
     pub timestamp: i64,
-    pub final_score: f32,
     pub priority: f32,
-    pub confidence: String,
-    pub post_type: String,
-    pub keyword_score: f32,
-    pub hashtag_score: f32,
-    pub semantic_score: f32,
-    pub classification_score: f32,
     pub has_media: i32,
     pub is_first_person: i32,
     pub author_did: Option<String>,
@@ -52,14 +46,7 @@ pub struct NewPost {
     pub uri: String,
     pub text: String,
     pub timestamp: i64,
-    pub final_score: f32,
     pub priority: f32,
-    pub confidence: String,
-    pub post_type: String,
-    pub keyword_score: f32,
-    pub hashtag_score: f32,
-    pub semantic_score: f32,
-    pub classification_score: f32,
     pub has_media: i32,
     pub is_first_person: i32,
     pub author_did: Option<String>,
@@ -67,6 +54,36 @@ pub struct NewPost {
     pub has_alt_text: i32,
     pub link_count: i32,
     pub promo_link_count: i32,
+}
+
+impl NewPost {
+    pub fn new(
+        uri: String,
+        text: String,
+        timestamp: i64,
+        priority: f32,
+        media: &MediaInfo,
+        content: &ContentSignals,
+        author_did: Option<String>,
+    ) -> Self {
+        Self {
+            uri,
+            text,
+            timestamp,
+            priority,
+            has_media: if media.image_count > 0 || media.has_video {
+                1
+            } else {
+                0
+            },
+            is_first_person: i32::from(content.is_first_person),
+            author_did,
+            image_count: content.images as i32,
+            has_alt_text: i32::from(content.has_alt_text),
+            link_count: content.link_count as i32,
+            promo_link_count: content.promo_link_count as i32,
+        }
+    }
 }
 
 #[derive(Insertable, Debug, Clone)]
@@ -131,7 +148,7 @@ pub fn get_feed(conn: &mut SqliteConnection, cutoff_timestamp: i64) -> QueryResu
 
     posts
         .filter(timestamp.gt(cutoff_timestamp))
-        .order(final_score.desc())
+        .order((timestamp.desc(), priority.desc()))
         .load::<Post>(conn)
 }
 

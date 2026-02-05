@@ -60,6 +60,7 @@ Settings(
         shuffle_variance: 0.05,
         preference_boost: 1.5,
         preference_penalty: 0.3,
+        priority_bucket_hours: 1,
     ),
     ml: Ml(
         batch_size: 16,

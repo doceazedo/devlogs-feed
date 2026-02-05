@@ -18,8 +18,6 @@ pub enum Filter {
     BlockedKeyword(String),
     #[strum(serialize = "blocked-hashtag")]
     BlockedHashtag(String),
-    #[strum(serialize = "ml-rejection")]
-    HighConfidenceNegative(String),
     #[strum(serialize = "spammer")]
     Spammer,
 }
@@ -62,13 +60,6 @@ pub fn apply_filters(
         }
     }
 
-    FilterResult::Pass
-}
-
-pub fn apply_ml_filter(best_label: &str, best_label_score: f32, is_negative: bool) -> FilterResult {
-    if is_negative && best_label_score >= settings().scoring.thresholds.ml_rejection {
-        return FilterResult::Reject(Filter::HighConfidenceNegative(best_label.to_string()));
-    }
     FilterResult::Pass
 }
 
@@ -129,27 +120,6 @@ mod tests {
     fn test_filter_pass() {
         let text = "Just implemented a new combat system in my game #gamedev";
         let result = apply_filters(text, Some("en"), None, no_spammer);
-        assert_eq!(result, FilterResult::Pass);
-    }
-
-    #[test]
-    fn test_ml_filter_high_confidence_negative() {
-        let result = apply_ml_filter("crypto or NFT related", 0.90, true);
-        assert!(matches!(
-            result,
-            FilterResult::Reject(Filter::HighConfidenceNegative(_))
-        ));
-    }
-
-    #[test]
-    fn test_ml_filter_low_confidence_negative() {
-        let result = apply_ml_filter("gamer discussing games", 0.70, true);
-        assert_eq!(result, FilterResult::Pass);
-    }
-
-    #[test]
-    fn test_ml_filter_positive() {
-        let result = apply_ml_filter("game developer sharing work", 0.95, false);
         assert_eq!(result, FilterResult::Pass);
     }
 }

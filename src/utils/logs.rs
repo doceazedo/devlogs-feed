@@ -1,8 +1,8 @@
 use console::{measure_text_width, Style};
 
 use crate::scoring::{
-    ContentSignals, Filter, FilterResult, MLScores, MediaInfo, PriorityBreakdown, PrioritySignals,
-    ScoreBreakdown,
+    ContentSignals, Filter, FilterResult, MediaInfo, PriorityBreakdown, PrioritySignals,
+    QualityAssessment,
 };
 use crate::settings::settings;
 
@@ -167,13 +167,7 @@ pub fn log_backfill_query_failed(query: &str, error: &str) {
     );
 }
 
-pub fn log_backfill_stats(
-    duplicates: usize,
-    filtered: usize,
-    no_relevance: usize,
-    ml_rejected: usize,
-    below_threshold: usize,
-) {
+pub fn log_backfill_stats(duplicates: usize, filtered: usize, no_relevance: usize) {
     println!("{} done.", backfill_prefix());
     println!("{}skipped:", tree_branch());
     println!(
@@ -193,23 +187,9 @@ pub fn log_backfill_stats(
     println!(
         "{}{}{} {}",
         tree_indent(),
-        tree_branch(),
+        tree_end(),
         pad_label("no relevance", 2),
         dim().apply_to(no_relevance)
-    );
-    println!(
-        "{}{}{} {}",
-        tree_indent(),
-        tree_branch(),
-        pad_label("ml rejected", 2),
-        dim().apply_to(ml_rejected)
-    );
-    println!(
-        "{}{}{} {}",
-        tree_indent(),
-        tree_end(),
-        pad_label("below threshold", 2),
-        dim().apply_to(below_threshold)
     );
 }
 
@@ -235,9 +215,7 @@ pub fn log_backfill_complete(total_accepted: usize, total_processed: usize) {
 pub enum AssessmentResult {
     Rejected(String),
     NoRelevance,
-    MlRejected(String),
-    BelowThreshold(f32),
-    Accepted(f32),
+    Accepted,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -246,10 +224,9 @@ pub struct PostAssessment {
     pub filter_result: Option<FilterResult>,
     pub has_keywords: bool,
     pub has_hashtags: bool,
-    pub ml_scores: Option<MLScores>,
+    pub quality: Option<QualityAssessment>,
     pub content_signals: Option<ContentSignals>,
     pub media_info: Option<MediaInfo>,
-    pub score: Option<ScoreBreakdown>,
     pub signals: Option<PrioritySignals>,
     pub priority: Option<PriorityBreakdown>,
     pub result: Option<AssessmentResult>,
@@ -283,44 +260,29 @@ impl PostAssessment {
         }
     }
 
-    pub fn set_ml_scores(&mut self, scores: MLScores) {
-        if scores.negative_rejection {
-            self.result = Some(AssessmentResult::MlRejected(scores.best_label.clone()));
-        }
-        self.ml_scores = Some(scores);
-    }
-
     pub fn set_content(&mut self, signals: ContentSignals, media: MediaInfo) {
         self.content_signals = Some(signals);
         self.media_info = Some(media);
     }
 
-    pub fn set_score_and_priority(
+    pub fn set_priority(
         &mut self,
-        score: ScoreBreakdown,
+        quality: QualityAssessment,
         signals: PrioritySignals,
         priority: PriorityBreakdown,
     ) {
-        self.score = Some(score);
+        self.quality = Some(quality);
         self.signals = Some(signals);
         self.priority = Some(priority);
-    }
-
-    pub fn set_threshold_result(&mut self, passed: bool) {
         if self.result.is_none() {
-            let final_score = self.score.as_ref().map(|s| s.final_score).unwrap_or(0.0);
-            self.result = Some(if passed {
-                AssessmentResult::Accepted(final_score)
-            } else {
-                AssessmentResult::BelowThreshold(final_score)
-            });
+            self.result = Some(AssessmentResult::Accepted);
         }
     }
 
     pub fn print(&self) {
         let mut lines: Vec<String> = Vec::new();
 
-        let is_accepted = matches!(&self.result, Some(AssessmentResult::Accepted(_)));
+        let is_accepted = matches!(&self.result, Some(AssessmentResult::Accepted));
 
         lines.push(format!(
             "{} \"{}\"",
@@ -356,71 +318,17 @@ impl PostAssessment {
             ));
             lines.push(format!(
                 "{}{} {}",
-                if self.ml_scores.is_some() {
-                    tree_branch()
-                } else {
-                    tree_end()
-                },
+                tree_end(),
                 pad_label("hashtags", 1),
                 ht_style.apply_to(self.has_hashtags)
             ));
         }
 
-        if let (Some(ref ml), Some(ref score), Some(ref priority)) =
-            (&self.ml_scores, &self.score, &self.priority)
-        {
-            let label_style = if ml.is_negative_label { red() } else { green() };
-            lines.push(format!(
-                "{}{} {} {}",
-                tree_end(),
-                pad_label("topic", 1),
-                label_style.apply_to(&ml.best_label),
-                dim().apply_to(format!("({:.0}%)", ml.best_label_score * 100.0))
-            ));
-
-            lines.push(String::new());
-            lines.push(format!("{}", bold().apply_to("SCORE")));
-            let s = settings();
-            lines.push(format!(
-                "{}{} {:.0}% {}",
-                tree_branch(),
-                pad_label("topic", 1),
-                score.classification_score * 100.0,
-                dim().apply_to(format!("(weight: {:.1})", s.scoring.weights.topic))
-            ));
-            lines.push(format!(
-                "{}{} {:.0}% {} {}",
-                tree_branch(),
-                pad_label("semantic", 1),
-                score.semantic_score * 100.0,
-                dim().apply_to(format!("(idx: {})", ml.best_reference_idx)),
-                dim().apply_to(format!("(weight: {:.1})", s.scoring.weights.semantic))
-            ));
-            let threshold_style = if score.final_score >= s.scoring.thresholds.score {
-                green().dim()
-            } else {
-                red().dim()
-            };
-            let score_str = format!(
-                "{} {}",
-                bold().apply_to(format!("{:.2}", score.final_score)),
-                threshold_style.apply_to(if score.final_score >= s.scoring.thresholds.score {
-                    format!("(>={})", s.scoring.thresholds.score)
-                } else {
-                    format!("(<{})", s.scoring.thresholds.score)
-                })
-            );
-            lines.push(format!(
-                "{}{} {}",
-                tree_end(),
-                pad_label("total", 1),
-                score_str
-            ));
-
+        if let (Some(ref quality), Some(ref priority)) = (&self.quality, &self.priority) {
             lines.push(String::new());
             lines.push(format!("{}", bold().apply_to("QUALITY")));
 
-            let quality = &ml.quality;
+            let s = settings();
             let bait_style =
                 if quality.engagement_bait_score >= s.scoring.quality.poor_quality_penalty_min {
                     yellow()
@@ -505,11 +413,9 @@ impl PostAssessment {
 
             let total_boosts = priority.content_modifier.max(0.0)
                 + priority.engagement_boost
-                + priority.authenticity_boost
-                + priority.label_boost.max(0.0);
-            let total_penalties = priority.quality_penalty
-                + priority.content_modifier.min(0.0).abs()
-                + priority.label_boost.min(0.0).abs();
+                + priority.authenticity_boost;
+            let total_penalties =
+                priority.quality_penalty + priority.content_modifier.min(0.0).abs();
 
             lines.push(format!("{}{}", tree_branch(), pad_label("modifiers", 1)));
             lines.push(format!(
@@ -531,25 +437,11 @@ impl PostAssessment {
                 "{}{}{}",
                 tree_end(),
                 pad_label("total", 1),
-                format_signed(priority.final_priority),
+                format_signed(priority.priority),
             ));
 
             lines.push(String::new());
             lines.push(format!("{}", bold().apply_to("RESULT")));
-
-            let conf_str = priority.confidence.to_string().to_lowercase();
-            let conf_desc = match conf_str.as_str() {
-                "strong" => "[strong] definitely gamedev",
-                "high" => "[high] likely gamedev",
-                "moderate" => "[moderate] maybe gamedev",
-                _ => "[low] not gamedev",
-            };
-            let conf_style = match conf_str.as_str() {
-                "strong" => green(),
-                "high" => cyan(),
-                "moderate" => yellow(),
-                _ => red(),
-            };
 
             let status_str = if is_accepted { "ACCEPTED" } else { "REJECTED" };
             let status_style = if is_accepted {
@@ -559,22 +451,10 @@ impl PostAssessment {
             };
 
             lines.push(format!(
-                "{}{} {}",
-                tree_branch(),
-                pad_label("score", 1),
-                score_str
-            ));
-            lines.push(format!(
                 "{}{}{}",
                 tree_branch(),
                 pad_label("priority", 1),
-                format_signed(priority.final_priority),
-            ));
-            lines.push(format!(
-                "{}{} {}",
-                tree_branch(),
-                pad_label("confidence", 1),
-                conf_style.apply_to(conf_desc)
+                format_signed(priority.priority),
             ));
             lines.push(format!(
                 "{}{} {}",
@@ -596,16 +476,6 @@ impl PostAssessment {
             let reason = match &self.result {
                 Some(AssessmentResult::Rejected(r)) => r.clone(),
                 Some(AssessmentResult::NoRelevance) => "no relevant keywords/hashtags".into(),
-                Some(AssessmentResult::MlRejected(label)) => {
-                    format!("ml classification ({})", label)
-                }
-                Some(AssessmentResult::BelowThreshold(p)) => {
-                    format!(
-                        "below threshold ({:.2} < {})",
-                        p,
-                        settings().scoring.thresholds.score
-                    )
-                }
                 _ => "unknown".into(),
             };
 
@@ -631,7 +501,6 @@ fn format_filter(filter: &Filter) -> String {
     match filter {
         Filter::BlockedKeyword(kw) => format!("{} ({})", filter, kw),
         Filter::BlockedHashtag(ht) => format!("{} ({})", filter, ht),
-        Filter::HighConfidenceNegative(label) => format!("{} ({})", filter, label),
         _ => filter.to_string(),
     }
 }

@@ -1,5 +1,3 @@
-// @generated automatically by Diesel CLI.
-
 diesel::table! {
     engagement_cache (post_uri) {
         post_uri -> Text,
@@ -23,14 +21,7 @@ diesel::table! {
         uri -> Text,
         text -> Text,
         timestamp -> BigInt,
-        final_score -> Float,
         priority -> Float,
-        confidence -> Text,
-        post_type -> Text,
-        keyword_score -> Float,
-        hashtag_score -> Float,
-        semantic_score -> Float,
-        classification_score -> Float,
         has_media -> Integer,
         is_first_person -> Integer,
         author_did -> Nullable<Text>,

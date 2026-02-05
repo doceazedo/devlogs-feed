@@ -1,7 +1,7 @@
 use crate::db::{self, DbPool, NewPost};
 use crate::scoring::{
-    apply_filters, apply_ml_filter, calculate_priority, calculate_score, extract_content_signals,
-    has_hashtags, has_keywords, label_boost, FilterResult, MLHandle, MediaInfo, PrioritySignals,
+    apply_filters, calculate_priority, extract_content_signals, has_hashtags, has_keywords,
+    FilterResult, MLHandle, MediaInfo, PrioritySignals,
 };
 use crate::settings::settings;
 use crate::utils::bluesky::{create_session, extract_facet_links, search_posts, SearchPost};
@@ -64,8 +64,6 @@ pub async fn run_backfill(pool: DbPool, ml_handle: &MLHandle) {
     let mut duplicates = 0;
     let mut filtered = 0;
     let mut no_relevance = 0;
-    let mut ml_rejected = 0;
-    let mut below_threshold = 0;
 
     for post in all_posts.iter().take(s.backfill.limit) {
         current += 1;
@@ -111,92 +109,37 @@ pub async fn run_backfill(pool: DbPool, ml_handle: &MLHandle) {
             continue;
         }
 
-        let ml_scores = ml_handle.score(text.clone()).await;
-        assessment.set_ml_scores(ml_scores.clone());
-
-        let ml_filter_result = apply_ml_filter(
-            &ml_scores.best_label,
-            ml_scores.best_label_score,
-            ml_scores.is_negative_label,
-        );
-        if matches!(ml_filter_result, FilterResult::Reject(_)) {
-            ml_rejected += 1;
-            continue;
-        }
+        let quality = ml_handle.score(text.clone()).await;
 
         let mut media_info = extract_media_from_embed(&post.embed);
         media_info.facet_links = extract_facet_links(&post.record.facets);
         let content = extract_content_signals(text, &media_info);
         assessment.set_content(content.clone(), media_info.clone());
 
-        let score = calculate_score(ml_scores.classification_score, ml_scores.semantic_score);
-
-        let signals = PrioritySignals {
-            topic_label: ml_scores.best_label.clone(),
-            label_boost: label_boost(&ml_scores.best_label),
-            engagement_bait_score: ml_scores.quality.engagement_bait_score,
-            synthetic_score: ml_scores.quality.synthetic_score,
-            authenticity_score: ml_scores.quality.authenticity_score,
-            is_first_person: content.is_first_person,
-            images: content.images,
-            has_video: content.has_video,
-            has_alt_text: content.has_alt_text,
-            link_count: content.link_count,
-            promo_link_count: content.promo_link_count,
-            ..Default::default()
-        };
-
-        let priority = calculate_priority(&score, &signals);
-        assessment.set_score_and_priority(score.clone(), signals.clone(), priority.clone());
-
-        let passed = score.passes_threshold();
-        assessment.set_threshold_result(passed);
+        let signals = PrioritySignals::new(&quality, &content);
+        let priority = calculate_priority(&signals);
+        assessment.set_priority(quality, signals, priority.clone());
         assessment.print();
 
-        if passed {
-            let new_post = NewPost {
-                uri: post.uri.clone(),
-                text: text.clone(),
-                timestamp,
-                final_score: score.final_score,
-                priority: priority.final_priority,
-                confidence: priority.confidence.to_string(),
-                post_type: priority.topic_label.clone(),
-                keyword_score: if found_keywords { 1.0 } else { 0.0 },
-                hashtag_score: if found_hashtags { 1.0 } else { 0.0 },
-                semantic_score: score.semantic_score,
-                classification_score: score.classification_score,
-                has_media: if media_info.image_count > 0 || media_info.has_video {
-                    1
-                } else {
-                    0
-                },
-                is_first_person: if content.is_first_person { 1 } else { 0 },
-                author_did: Some(post.author.did.clone()),
-                image_count: content.images as i32,
-                has_alt_text: if content.has_alt_text { 1 } else { 0 },
-                link_count: content.link_count as i32,
-                promo_link_count: content.promo_link_count as i32,
-            };
+        let new_post = NewPost::new(
+            post.uri.clone(),
+            text.clone(),
+            timestamp,
+            priority.priority,
+            &media_info,
+            &content,
+            Some(post.author.did.clone()),
+        );
 
-            new_posts.push(new_post);
+        new_posts.push(new_post);
 
-            if new_posts.len() >= s.backfill.limit {
-                break;
-            }
-        } else {
-            below_threshold += 1;
+        if new_posts.len() >= s.backfill.limit {
+            break;
         }
     }
 
     let accepted = new_posts.len();
-    logs::log_backfill_stats(
-        duplicates,
-        filtered,
-        no_relevance,
-        ml_rejected,
-        below_threshold,
-    );
+    logs::log_backfill_stats(duplicates, filtered, no_relevance);
     if !new_posts.is_empty() {
         let _ = db::insert_posts(&mut conn, new_posts);
     }

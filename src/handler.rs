@@ -5,9 +5,8 @@ use crate::db::{
 };
 use crate::engagement::EngagementTracker;
 use crate::scoring::{
-    apply_filters, apply_ml_filter, apply_time_decay, calculate_priority, calculate_score,
-    extract_content_signals, has_hashtags, has_keywords, label_boost, FilterResult, MLHandle,
-    MediaInfo, PrioritySignals,
+    apply_filters, calculate_priority, extract_content_signals, has_hashtags, has_keywords,
+    FilterResult, MLHandle, MediaInfo, PrioritySignals,
 };
 use crate::settings::settings;
 use crate::utils::logs::{self, PostAssessment};
@@ -191,78 +190,28 @@ impl FeedHandler for GameDevFeedHandler {
             return;
         }
 
-        let ml_scores = self.ml_handle.score(text.clone()).await;
-        assessment.set_ml_scores(ml_scores.clone());
-
-        let ml_filter_result = apply_ml_filter(
-            &ml_scores.best_label,
-            ml_scores.best_label_score,
-            ml_scores.is_negative_label,
-        );
-
-        if let FilterResult::Reject(_) = ml_filter_result {
-            return;
-        }
+        let quality = self.ml_handle.score(text.clone()).await;
 
         let media_info = Self::extract_media_info(&post);
         let content = extract_content_signals(text, &media_info);
         assessment.set_content(content.clone(), media_info.clone());
 
-        let score = calculate_score(ml_scores.classification_score, ml_scores.semantic_score);
-
-        let signals = PrioritySignals {
-            topic_label: ml_scores.best_label.clone(),
-            label_boost: label_boost(&ml_scores.best_label),
-            engagement_bait_score: ml_scores.quality.engagement_bait_score,
-            synthetic_score: ml_scores.quality.synthetic_score,
-            authenticity_score: ml_scores.quality.authenticity_score,
-            is_first_person: content.is_first_person,
-            images: content.images,
-            has_video: content.has_video,
-            has_alt_text: content.has_alt_text,
-            link_count: content.link_count,
-            promo_link_count: content.promo_link_count,
-            engagement_velocity: 0.0,
-            reply_count: 0,
-            repost_count: 0,
-            like_count: 0,
-        };
-
-        let priority = calculate_priority(&score, &signals);
-        assessment.set_score_and_priority(score.clone(), signals.clone(), priority.clone());
-
-        let passed = score.passes_threshold();
-        assessment.set_threshold_result(passed);
+        let signals = PrioritySignals::new(&quality, &content);
+        let priority = calculate_priority(&signals);
+        assessment.set_priority(quality, signals, priority.clone());
         assessment.print();
 
-        if passed {
-            let new_post = NewPost {
-                uri: post.uri.0.clone(),
-                text: text.clone(),
-                timestamp: post.timestamp.timestamp(),
-                final_score: score.final_score,
-                priority: priority.final_priority,
-                confidence: priority.confidence.to_string(),
-                post_type: priority.topic_label.clone(),
-                keyword_score: if found_keywords { 1.0 } else { 0.0 },
-                hashtag_score: if found_hashtags { 1.0 } else { 0.0 },
-                semantic_score: score.semantic_score,
-                classification_score: score.classification_score,
-                has_media: if media_info.image_count > 0 || media_info.has_video {
-                    1
-                } else {
-                    0
-                },
-                is_first_person: if content.is_first_person { 1 } else { 0 },
-                author_did: Some(author_did.to_string()),
-                image_count: content.images as i32,
-                has_alt_text: if content.has_alt_text { 1 } else { 0 },
-                link_count: content.link_count as i32,
-                promo_link_count: content.promo_link_count as i32,
-            };
+        let new_post = NewPost::new(
+            post.uri.0.clone(),
+            text.clone(),
+            post.timestamp.timestamp(),
+            priority.priority,
+            &media_info,
+            &content,
+            Some(author_did.to_string()),
+        );
 
-            self.pending_posts.push(new_post);
-        }
+        self.pending_posts.push(new_post);
     }
 
     async fn delete_post(&mut self, uri: Uri) {
@@ -350,9 +299,6 @@ impl FeedHandler for GameDevFeedHandler {
             .iter()
             .filter(|p| !seen_posts.contains(&p.uri))
             .map(|p| {
-                let post_time = chrono::DateTime::from_timestamp(p.timestamp, 0).unwrap_or(now);
-                let base_score = apply_time_decay(p.priority, post_time, now);
-
                 let preference_modifier = p
                     .author_did
                     .as_ref()
@@ -368,13 +314,21 @@ impl FeedHandler for GameDevFeedHandler {
                     .unwrap_or(1.0);
 
                 let variance = rng.random_range(-s.feed.shuffle_variance..s.feed.shuffle_variance);
-                let final_score = base_score * preference_modifier * (1.0 + variance);
+                let adjusted_priority = p.priority * preference_modifier * (1.0 + variance);
 
-                (p, final_score)
+                (p, adjusted_priority)
             })
             .collect();
 
-        scored_posts.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
+        let bucket_seconds = s.feed.priority_bucket_hours * 3600;
+        scored_posts.sort_by(|a, b| {
+            let bucket_a = a.0.timestamp / bucket_seconds;
+            let bucket_b = b.0.timestamp / bucket_seconds;
+            match bucket_b.cmp(&bucket_a) {
+                Ordering::Equal => b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal),
+                other => other,
+            }
+        });
 
         let page_posts: Vec<_> = scored_posts
             .into_iter()

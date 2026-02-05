@@ -1,84 +1,11 @@
 use anyhow::Result;
 use rust_bert::pipelines::zero_shot_classification::ZeroShotClassificationModel;
-use std::str::FromStr;
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 use strum::{Display, EnumIter, IntoEnumIterator, IntoStaticStr};
 
-use super::semantic::{compute_reference_embeddings, semantic_similarity_batch};
 use crate::settings::settings;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Display, EnumIter, IntoStaticStr)]
-pub enum TopicLabel {
-    #[strum(to_string = "game developer sharing their own work")]
-    GameDevSharingWork,
-    #[strum(to_string = "game development rant")]
-    GameDevRant,
-    #[strum(to_string = "game programming or technical development")]
-    GameProgramming,
-    #[strum(to_string = "marketing or promotional content")]
-    Marketing,
-    #[strum(to_string = "job posting or job search")]
-    JobPosting,
-    #[strum(to_string = "AI generated")]
-    GenAi,
-    #[strum(to_string = "crypto or NFT related")]
-    CryptoNFT,
-    #[strum(to_string = "unrelated")]
-    Unrelated,
-}
-
-impl TopicLabel {
-    pub fn is_positive(&self) -> bool {
-        match self {
-            Self::GameDevSharingWork | Self::GameProgramming => true,
-            _ => false,
-        }
-    }
-
-    pub fn boost(&self) -> f32 {
-        let boosts = &settings().scoring.topic_boosts;
-        match self {
-            Self::GameDevSharingWork => boosts.game_dev_sharing_work,
-            Self::GameDevRant => boosts.game_dev_rant,
-            Self::GameProgramming => boosts.game_programming,
-            _ => 0.0,
-        }
-    }
-
-    pub fn positive_labels() -> Vec<&'static str> {
-        Self::iter()
-            .filter(|l| l.is_positive())
-            .map(|l| l.into())
-            .collect()
-    }
-
-    pub fn negative_labels() -> Vec<&'static str> {
-        Self::iter()
-            .filter(|l| !l.is_positive())
-            .map(|l| l.into())
-            .collect()
-    }
-
-    pub fn all_labels() -> Vec<&'static str> {
-        Self::iter().map(|l| l.into()).collect()
-    }
-}
-
-impl FromStr for TopicLabel {
-    type Err = ();
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Self::iter().find(|l| l.to_string() == s).ok_or(())
-    }
-}
-
-pub fn label_boost(label: &str) -> f32 {
-    TopicLabel::from_str(label)
-        .map(|l| l.boost())
-        .unwrap_or(settings().scoring.topic_boosts.default)
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Display, EnumIter, IntoStaticStr)]
 pub enum QualityLabel {
@@ -97,15 +24,6 @@ impl QualityLabel {
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct TopicClassification {
-    pub score: f32,
-    pub best_label: String,
-    pub best_label_score: f32,
-    pub all_labels: Vec<(String, f32)>,
-    pub is_negative_label: bool,
-}
-
-#[derive(Debug, Clone, Default)]
 pub struct QualityAssessment {
     pub engagement_bait_score: f32,
     pub synthetic_score: f32,
@@ -115,23 +33,8 @@ pub struct QualityAssessment {
 pub enum MLRequest {
     Score {
         text: String,
-        response_tx: tokio::sync::oneshot::Sender<MLScores>,
+        response_tx: tokio::sync::oneshot::Sender<QualityAssessment>,
     },
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct MLScores {
-    pub topic: TopicClassification,
-    pub quality: QualityAssessment,
-    pub semantic_score: f32,
-    pub best_reference_idx: usize,
-
-    pub classification_score: f32,
-    pub best_label: String,
-    pub best_label_score: f32,
-    pub all_labels: Vec<(String, f32)>,
-    pub is_negative_label: bool,
-    pub negative_rejection: bool,
 }
 
 #[derive(Clone)]
@@ -150,7 +53,7 @@ impl MLHandle {
         Ok(Self { request_tx })
     }
 
-    pub async fn score(&self, text: String) -> MLScores {
+    pub async fn score(&self, text: String) -> QualityAssessment {
         let (response_tx, response_rx) = tokio::sync::oneshot::channel();
 
         if self
@@ -158,7 +61,7 @@ impl MLHandle {
             .send(MLRequest::Score { text, response_tx })
             .is_err()
         {
-            return MLScores::default();
+            return QualityAssessment::default();
         }
 
         response_rx.await.unwrap_or_default()
@@ -167,12 +70,11 @@ impl MLHandle {
 
 fn run_ml_worker(request_rx: mpsc::Receiver<MLRequest>) -> Result<()> {
     let classifier = ZeroShotClassificationModel::new(Default::default())?;
-    let (embeddings, reference_embeddings) = compute_reference_embeddings()?;
     let s = settings();
     let batch_timeout = Duration::from_millis(s.ml.batch_timeout_ms);
 
     loop {
-        let mut batch: Vec<(String, tokio::sync::oneshot::Sender<MLScores>)> = Vec::new();
+        let mut batch: Vec<(String, tokio::sync::oneshot::Sender<QualityAssessment>)> = Vec::new();
 
         match request_rx.recv() {
             Ok(MLRequest::Score { text, response_tx }) => {
@@ -196,86 +98,15 @@ fn run_ml_worker(request_rx: mpsc::Receiver<MLRequest>) -> Result<()> {
         }
 
         let texts: Vec<&str> = batch.iter().map(|(t, _)| t.as_str()).collect();
-
-        let topics = classify_topic_batch(&classifier, &texts);
         let qualities = assess_quality_batch(&classifier, &texts);
-        let semantics = semantic_similarity_batch(&embeddings, &reference_embeddings, &texts);
 
         for (i, (_, response_tx)) in batch.into_iter().enumerate() {
-            let topic = topics.get(i).cloned().unwrap_or_default();
             let quality = qualities.get(i).cloned().unwrap_or_default();
-            let (semantic_score, best_ref_idx) = semantics.get(i).copied().unwrap_or((0.0, 0));
-
-            let negative_rejection = topic.is_negative_label
-                && topic.best_label_score >= s.scoring.thresholds.ml_rejection;
-
-            let _ = response_tx.send(MLScores {
-                classification_score: topic.score,
-                semantic_score,
-                best_label: topic.best_label.clone(),
-                best_label_score: topic.best_label_score,
-                best_reference_idx: best_ref_idx,
-                all_labels: topic.all_labels.clone(),
-                is_negative_label: topic.is_negative_label,
-                negative_rejection,
-                topic,
-                quality,
-            });
+            let _ = response_tx.send(quality);
         }
     }
 
     Ok(())
-}
-
-fn classify_topic_batch(
-    classifier: &ZeroShotClassificationModel,
-    texts: &[&str],
-) -> Vec<TopicClassification> {
-    let all_labels = TopicLabel::all_labels();
-
-    let result = classifier.predict_multilabel(
-        texts,
-        &all_labels,
-        Some(Box::new(|label| format!("This post is about {}.", label))),
-        128,
-    );
-
-    match result {
-        Ok(predictions) => predictions
-            .iter()
-            .map(|labels| {
-                let mut all_scores: Vec<(String, f32)> = labels
-                    .iter()
-                    .map(|l| (l.text.clone(), l.score as f32))
-                    .collect();
-                all_scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
-
-                if let Some((best_label, best_score)) = all_scores.first() {
-                    let is_positive = TopicLabel::from_str(best_label)
-                        .map(|l| l.is_positive())
-                        .unwrap_or(false);
-                    let is_negative = !is_positive;
-
-                    let score = if is_positive {
-                        *best_score
-                    } else {
-                        1.0 - best_score
-                    };
-
-                    TopicClassification {
-                        score,
-                        best_label: best_label.clone(),
-                        best_label_score: *best_score,
-                        all_labels: all_scores,
-                        is_negative_label: is_negative,
-                    }
-                } else {
-                    TopicClassification::default()
-                }
-            })
-            .collect(),
-        Err(_) => vec![TopicClassification::default(); texts.len()],
-    }
 }
 
 fn assess_quality_batch(

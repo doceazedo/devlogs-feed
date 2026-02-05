@@ -1,40 +1,10 @@
-use super::score::ScoreBreakdown;
+use super::classification::QualityAssessment;
+use super::content::ContentSignals;
 use crate::settings::settings;
 use crate::utils::logs::{dim, format_signed, pad_label};
-use strum::Display;
-
-#[derive(Debug, Clone, Copy, PartialEq, Display)]
-pub enum ConfidenceTier {
-    #[strum(serialize = "STRONG")]
-    Strong,
-    #[strum(serialize = "HIGH")]
-    High,
-    #[strum(serialize = "MODERATE")]
-    Moderate,
-    #[strum(serialize = "LOW")]
-    Low,
-}
-
-impl ConfidenceTier {
-    pub fn from_score(score: f32) -> Self {
-        let conf = &settings().scoring.confidence;
-        if score >= conf.strong {
-            ConfidenceTier::Strong
-        } else if score >= conf.high {
-            ConfidenceTier::High
-        } else if score >= conf.moderate {
-            ConfidenceTier::Moderate
-        } else {
-            ConfidenceTier::Low
-        }
-    }
-}
 
 #[derive(Debug, Clone, Default)]
 pub struct PrioritySignals {
-    pub topic_label: String,
-    pub label_boost: f32,
-
     pub engagement_bait_score: f32,
     pub synthetic_score: f32,
     pub authenticity_score: f32,
@@ -52,38 +22,35 @@ pub struct PrioritySignals {
     pub like_count: i32,
 }
 
-#[derive(Debug, Clone)]
+impl PrioritySignals {
+    pub fn new(quality: &QualityAssessment, content: &ContentSignals) -> Self {
+        Self {
+            engagement_bait_score: quality.engagement_bait_score,
+            synthetic_score: quality.synthetic_score,
+            authenticity_score: quality.authenticity_score,
+            is_first_person: content.is_first_person,
+            images: content.images,
+            has_video: content.has_video,
+            has_alt_text: content.has_alt_text,
+            link_count: content.link_count,
+            promo_link_count: content.promo_link_count,
+            ..Default::default()
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
 pub struct PriorityBreakdown {
     pub quality_penalty: f32,
     pub content_modifier: f32,
     pub engagement_boost: f32,
     pub authenticity_boost: f32,
-    pub label_boost: f32,
-    pub final_priority: f32,
-    pub confidence: ConfidenceTier,
-    pub topic_label: String,
+    pub priority: f32,
     pub boost_reasons: Vec<String>,
     pub penalty_reasons: Vec<String>,
 }
 
-impl Default for PriorityBreakdown {
-    fn default() -> Self {
-        Self {
-            quality_penalty: 0.0,
-            content_modifier: 0.0,
-            engagement_boost: 0.0,
-            authenticity_boost: 0.0,
-            label_boost: 0.0,
-            final_priority: 0.0,
-            confidence: ConfidenceTier::Low,
-            topic_label: String::new(),
-            boost_reasons: Vec::new(),
-            penalty_reasons: Vec::new(),
-        }
-    }
-}
-
-pub fn calculate_priority(score: &ScoreBreakdown, signals: &PrioritySignals) -> PriorityBreakdown {
+pub fn calculate_priority(signals: &PrioritySignals) -> PriorityBreakdown {
     let s = settings();
     let mut boosts = Vec::new();
     let mut penalties = Vec::new();
@@ -191,28 +158,14 @@ pub fn calculate_priority(score: &ScoreBreakdown, signals: &PrioritySignals) -> 
         ));
     }
 
-    let label_boost = signals.label_boost;
-    boosts.push(format!(
-        "{}{}",
-        pad_label("topic:", 2),
-        format_signed(label_boost),
-    ));
-
-    let final_priority =
-        score.final_score + content_modifier + engagement_boost + authenticity_boost + label_boost
-            - quality_penalty;
-
-    let confidence = ConfidenceTier::from_score(score.final_score);
+    let priority = content_modifier + engagement_boost + authenticity_boost - quality_penalty;
 
     PriorityBreakdown {
         quality_penalty,
         content_modifier,
         engagement_boost,
         authenticity_boost,
-        label_boost,
-        final_priority,
-        confidence,
-        topic_label: signals.topic_label.clone(),
+        priority,
         boost_reasons: boosts,
         penalty_reasons: penalties,
     }
@@ -234,43 +187,24 @@ fn calculate_engagement_boost(signals: &PrioritySignals) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scoring::calculate_score;
-
-    #[test]
-    fn test_confidence_tiers() {
-        assert_eq!(ConfidenceTier::from_score(0.90), ConfidenceTier::Strong);
-        assert_eq!(ConfidenceTier::from_score(0.75), ConfidenceTier::High);
-        assert_eq!(ConfidenceTier::from_score(0.55), ConfidenceTier::Moderate);
-        assert_eq!(ConfidenceTier::from_score(0.30), ConfidenceTier::Low);
-    }
 
     #[test]
     fn test_basic_priority() {
-        let score = calculate_score(0.8, 0.7);
-        let signals = PrioritySignals {
-            topic_label: "game developer sharing work".to_string(),
-            label_boost: 1.0,
-            ..Default::default()
-        };
-
-        let breakdown = calculate_priority(&score, &signals);
+        let signals = PrioritySignals::default();
+        let breakdown = calculate_priority(&signals);
         assert_eq!(breakdown.quality_penalty, 0.0);
     }
 
     #[test]
     fn test_first_person_boost() {
-        let score = calculate_score(0.5, 0.5);
-        let mut signals = PrioritySignals {
-            label_boost: 1.0,
-            ..Default::default()
-        };
+        let mut signals = PrioritySignals::default();
 
-        let without = calculate_priority(&score, &signals);
+        let without = calculate_priority(&signals);
 
         signals.is_first_person = true;
-        let with = calculate_priority(&score, &signals);
+        let with = calculate_priority(&signals);
 
-        assert!(with.final_priority > without.final_priority);
+        assert!(with.priority > without.priority);
         assert!(with
             .boost_reasons
             .iter()
@@ -279,36 +213,30 @@ mod tests {
 
     #[test]
     fn test_video_boost() {
-        let score = calculate_score(0.5, 0.5);
-        let mut signals = PrioritySignals {
-            label_boost: 1.0,
-            ..Default::default()
-        };
+        let mut signals = PrioritySignals::default();
 
-        let without = calculate_priority(&score, &signals);
+        let without = calculate_priority(&signals);
 
         signals.has_video = true;
-        let with = calculate_priority(&score, &signals);
+        let with = calculate_priority(&signals);
 
-        assert!(with.final_priority > without.final_priority);
+        assert!(with.priority > without.priority);
         assert!(with.boost_reasons.iter().any(|r| r.contains("video")));
     }
 
     #[test]
     fn test_image_with_alt_boost() {
-        let score = calculate_score(0.5, 0.5);
         let mut signals = PrioritySignals {
-            label_boost: 1.0,
             images: 1,
             ..Default::default()
         };
 
-        let without_alt = calculate_priority(&score, &signals);
+        let without_alt = calculate_priority(&signals);
 
         signals.has_alt_text = true;
-        let with_alt = calculate_priority(&score, &signals);
+        let with_alt = calculate_priority(&signals);
 
-        assert!(with_alt.final_priority > without_alt.final_priority);
+        assert!(with_alt.priority > without_alt.priority);
         assert!(with_alt
             .boost_reasons
             .iter()
@@ -317,35 +245,29 @@ mod tests {
 
     #[test]
     fn test_many_images_penalty() {
-        let score = calculate_score(0.5, 0.5);
         let mut signals = PrioritySignals {
-            label_boost: 1.0,
             images: 2,
             ..Default::default()
         };
 
-        let few = calculate_priority(&score, &signals);
+        let few = calculate_priority(&signals);
 
         signals.images = 3;
-        let many = calculate_priority(&score, &signals);
+        let many = calculate_priority(&signals);
 
-        assert!(many.final_priority < few.final_priority);
+        assert!(many.priority < few.priority);
         assert!(many.penalty_reasons.iter().any(|r| r.contains("images")));
     }
 
     #[test]
     fn test_link_penalties() {
-        let score = calculate_score(1.0, 1.0);
-        let mut signals = PrioritySignals {
-            label_boost: 1.0,
-            ..Default::default()
-        };
+        let mut signals = PrioritySignals::default();
 
-        let no_links = calculate_priority(&score, &signals);
+        let no_links = calculate_priority(&signals);
         assert!(no_links.penalty_reasons.is_empty());
 
         signals.link_count = 1;
-        let with_links = calculate_priority(&score, &signals);
+        let with_links = calculate_priority(&signals);
         assert!(with_links.content_modifier < no_links.content_modifier);
         assert!(with_links
             .penalty_reasons
@@ -354,7 +276,7 @@ mod tests {
 
         signals.link_count = 0;
         signals.promo_link_count = 1;
-        let with_promo = calculate_priority(&score, &signals);
+        let with_promo = calculate_priority(&signals);
         assert!(with_promo.content_modifier < no_links.content_modifier);
         assert!(with_promo
             .penalty_reasons
@@ -364,57 +286,34 @@ mod tests {
 
     #[test]
     fn test_quality_penalties() {
-        let score = calculate_score(0.8, 0.7);
-        let mut signals = PrioritySignals {
-            label_boost: 1.0,
-            ..Default::default()
-        };
+        let mut signals = PrioritySignals::default();
 
-        let good = calculate_priority(&score, &signals);
+        let good = calculate_priority(&signals);
 
         signals.synthetic_score = 0.8;
-        let low_effort = calculate_priority(&score, &signals);
+        let low_effort = calculate_priority(&signals);
 
-        assert!(low_effort.final_priority < good.final_priority);
+        assert!(low_effort.priority < good.priority);
         assert!(low_effort.quality_penalty > 0.0);
 
         signals.synthetic_score = 0.0;
         signals.engagement_bait_score = 0.8;
-        let bait = calculate_priority(&score, &signals);
+        let bait = calculate_priority(&signals);
 
-        assert!(bait.final_priority < good.final_priority);
+        assert!(bait.priority < good.priority);
     }
 
     #[test]
     fn test_engagement_boost() {
-        let score = calculate_score(0.5, 0.5);
-        let mut signals = PrioritySignals {
-            label_boost: 1.0,
-            ..Default::default()
-        };
+        let mut signals = PrioritySignals::default();
 
-        let no_engagement = calculate_priority(&score, &signals);
+        let no_engagement = calculate_priority(&signals);
 
         signals.reply_count = 10;
         signals.repost_count = 5;
         signals.like_count = 20;
-        let with_engagement = calculate_priority(&score, &signals);
+        let with_engagement = calculate_priority(&signals);
 
         assert!(with_engagement.engagement_boost > no_engagement.engagement_boost);
-    }
-
-    #[test]
-    fn test_priority_not_clamped() {
-        let score = calculate_score(1.0, 1.0);
-        let signals = PrioritySignals {
-            label_boost: 2.0,
-            is_first_person: true,
-            has_video: true,
-            engagement_velocity: 100.0,
-            ..Default::default()
-        };
-
-        let breakdown = calculate_priority(&score, &signals);
-        assert!(breakdown.final_priority > 2.0);
     }
 }

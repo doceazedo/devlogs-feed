@@ -14,7 +14,6 @@ pub struct Settings {
     pub ml: Ml,
     pub spam: Spam,
     pub backfill: Backfill,
-    pub decay: Decay,
     pub filters: Filters,
 }
 
@@ -38,25 +37,14 @@ pub struct Server {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Scoring {
     pub thresholds: ScoringThresholds,
-    pub weights: ScoringWeights,
     pub bonuses: ContentBonuses,
     pub penalties: ContentPenalties,
     pub quality: QualityThresholds,
-    pub confidence: ConfidenceThresholds,
-    pub topic_boosts: TopicBoosts,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScoringThresholds {
-    pub score: f32,
-    pub ml_rejection: f32,
     pub min_text_length: usize,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ScoringWeights {
-    pub topic: f32,
-    pub semantic: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -82,21 +70,6 @@ pub struct QualityThresholds {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ConfidenceThresholds {
-    pub strong: f32,
-    pub high: f32,
-    pub moderate: f32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TopicBoosts {
-    pub game_dev_sharing_work: f32,
-    pub game_dev_rant: f32,
-    pub game_programming: f32,
-    pub default: f32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Engagement {
     pub weights: EngagementWeights,
     pub velocity_scale: f32,
@@ -119,6 +92,7 @@ pub struct Feed {
     pub shuffle_variance: f32,
     pub preference_boost: f32,
     pub preference_penalty: f32,
+    pub priority_bucket_hours: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -139,12 +113,6 @@ pub struct Backfill {
     pub hours: i64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Decay {
-    pub every_x_hours: f32,
-    pub factor: f32,
-}
-
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -156,13 +124,7 @@ impl Default for Settings {
             },
             scoring: Scoring {
                 thresholds: ScoringThresholds {
-                    score: 0.50,
-                    ml_rejection: 0.85,
                     min_text_length: 20,
-                },
-                weights: ScoringWeights {
-                    topic: 0.8,
-                    semantic: 0.20,
                 },
                 bonuses: ContentBonuses {
                     first_person: 0.2,
@@ -179,17 +141,6 @@ impl Default for Settings {
                     poor_quality_penalty_min: 0.5,
                     good_quality_boost_min: 0.1,
                     engagement_boost_min: 0.05,
-                },
-                confidence: ConfidenceThresholds {
-                    strong: 0.85,
-                    high: 0.70,
-                    moderate: 0.50,
-                },
-                topic_boosts: TopicBoosts {
-                    game_dev_sharing_work: 0.4,
-                    game_dev_rant: 0.6,
-                    game_programming: 0.2,
-                    default: 0.6,
                 },
             },
             engagement: Engagement {
@@ -209,6 +160,7 @@ impl Default for Settings {
                 shuffle_variance: 0.05,
                 preference_boost: 1.5,
                 preference_penalty: 0.3,
+                priority_bucket_hours: 1,
             },
             ml: Ml {
                 batch_size: 16,
@@ -221,10 +173,6 @@ impl Default for Settings {
             backfill: Backfill {
                 limit: 200,
                 hours: 96,
-            },
-            decay: Decay {
-                every_x_hours: 2.0,
-                factor: 0.75,
             },
             filters: Filters {
                 gamedev_keywords: vec![
