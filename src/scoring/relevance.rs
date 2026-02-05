@@ -9,6 +9,10 @@ pub fn strip_hashtags(text: &str) -> String {
     HASHTAG_PATTERN.replace_all(text, "").trim().to_string()
 }
 
+pub fn count_all_hashtags(text: &str) -> usize {
+    HASHTAG_PATTERN.find_iter(text).count()
+}
+
 fn contains_keyword(text: &str, keyword: &str) -> bool {
     let keyword_parts: Vec<&str> = WORD_SPLIT
         .split(keyword)

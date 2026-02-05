@@ -175,7 +175,12 @@ impl FeedHandler for GameDevFeedHandler {
 
         let mut assessment = PostAssessment::new(text);
 
-        let filter_result = apply_filters(text, lang, Some(author_did), |did| self.is_spammer(did));
+        let media_info = Self::extract_media_info(&post);
+
+        let filter_result =
+            apply_filters(text, lang, Some(author_did), &media_info, |did| {
+                self.is_spammer(did)
+            });
         assessment.set_filter_result(filter_result.clone());
 
         if let FilterResult::Reject(_) = filter_result {
@@ -192,13 +197,19 @@ impl FeedHandler for GameDevFeedHandler {
 
         let quality = self.ml_handle.score(text.clone()).await;
 
-        let media_info = Self::extract_media_info(&post);
         let content = extract_content_signals(text, &media_info);
         assessment.set_content(content.clone(), media_info.clone());
 
         let signals = PrioritySignals::new(&quality, &content);
         let priority = calculate_priority(&signals);
         assessment.set_priority(quality, signals, priority.clone());
+
+        if priority.priority < settings().scoring.rejection.min_priority {
+            assessment.reject_low_priority();
+            assessment.print();
+            return;
+        }
+
         assessment.print();
 
         let new_post = NewPost::new(

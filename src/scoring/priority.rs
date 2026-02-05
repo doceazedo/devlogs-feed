@@ -14,7 +14,6 @@ pub struct PrioritySignals {
     pub has_video: bool,
     pub has_alt_text: bool,
     pub link_count: u8,
-    pub promo_link_count: u8,
 
     pub engagement_velocity: f32,
     pub reply_count: i32,
@@ -33,7 +32,6 @@ impl PrioritySignals {
             has_video: content.has_video,
             has_alt_text: content.has_alt_text,
             link_count: content.link_count,
-            promo_link_count: content.promo_link_count,
             ..Default::default()
         }
     }
@@ -126,17 +124,6 @@ pub fn calculate_priority(signals: &PrioritySignals) -> PriorityBreakdown {
             pad_label("links:", 2),
             format_signed(link_penalty),
             dim().apply_to(format!("({})", signals.link_count))
-        ));
-    }
-
-    if signals.promo_link_count > 0 {
-        let promo_penalty = signals.promo_link_count as f32 * s.scoring.penalties.promo_link;
-        content_modifier -= promo_penalty;
-        penalties.push(format!(
-            "{}{} {}",
-            pad_label("promo-links:", 2),
-            format_signed(promo_penalty),
-            dim().apply_to(format!("({})", signals.promo_link_count))
         ));
     }
 
@@ -274,14 +261,6 @@ mod tests {
             .iter()
             .any(|r| r.contains("links")));
 
-        signals.link_count = 0;
-        signals.promo_link_count = 1;
-        let with_promo = calculate_priority(&signals);
-        assert!(with_promo.content_modifier < no_links.content_modifier);
-        assert!(with_promo
-            .penalty_reasons
-            .iter()
-            .any(|r| r.contains("promo")));
     }
 
     #[test]

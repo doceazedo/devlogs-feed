@@ -279,6 +279,10 @@ impl PostAssessment {
         }
     }
 
+    pub fn reject_low_priority(&mut self) {
+        self.result = Some(AssessmentResult::Rejected("low-priority".into()));
+    }
+
     pub fn print(&self) {
         let mut lines: Vec<String> = Vec::new();
 
@@ -501,6 +505,7 @@ fn format_filter(filter: &Filter) -> String {
     match filter {
         Filter::BlockedKeyword(kw) => format!("{} ({})", filter, kw),
         Filter::BlockedHashtag(ht) => format!("{} ({})", filter, ht),
+        Filter::TooManyHashtags(count) => format!("{} ({})", filter, count),
         _ => filter.to_string(),
     }
 }

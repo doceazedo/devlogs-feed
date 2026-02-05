@@ -18,12 +18,15 @@ Settings(
             many_images: 0.2,
             many_images_threshold: 3,
             link_exponential_base: 3.0,
-            promo_link: 1.5,
         ),
         quality: QualityThresholds(
             poor_quality_penalty_min: 0.5,
             good_quality_boost_min: 0.1,
             engagement_boost_min: 0.05,
+        ),
+        rejection: RejectionThresholds(
+            min_priority: -5.0,
+            max_hashtags: 6,
         ),
     ),
     engagement: Engagement(

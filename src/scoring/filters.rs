@@ -1,4 +1,5 @@
-use super::relevance::strip_hashtags;
+use super::content::{is_promo_domain, MediaInfo};
+use super::relevance::{count_all_hashtags, strip_hashtags};
 use crate::settings::settings;
 use strum::Display;
 
@@ -20,12 +21,19 @@ pub enum Filter {
     BlockedHashtag(String),
     #[strum(serialize = "spammer")]
     Spammer,
+    #[strum(serialize = "promo-link")]
+    PromoLink,
+    #[strum(serialize = "too-many-hashtags")]
+    TooManyHashtags(usize),
+    #[strum(serialize = "low-priority")]
+    LowPriority,
 }
 
 pub fn apply_filters(
     text: &str,
     lang: Option<&str>,
     author_did: Option<&str>,
+    media: &MediaInfo,
     spammer_check: impl Fn(&str) -> bool,
 ) -> FilterResult {
     let s = settings();
@@ -60,6 +68,20 @@ pub fn apply_filters(
         }
     }
 
+    let has_promo = media.facet_links.iter().any(|uri| is_promo_domain(uri))
+        || media
+            .external_uri
+            .as_ref()
+            .is_some_and(|uri| is_promo_domain(uri));
+    if has_promo {
+        return FilterResult::Reject(Filter::PromoLink);
+    }
+
+    let hashtag_count = count_all_hashtags(text);
+    if hashtag_count > s.scoring.rejection.max_hashtags as usize {
+        return FilterResult::Reject(Filter::TooManyHashtags(hashtag_count));
+    }
+
     FilterResult::Pass
 }
 
@@ -71,26 +93,30 @@ mod tests {
         false
     }
 
+    fn no_media() -> MediaInfo {
+        MediaInfo::default()
+    }
+
     #[test]
     fn test_filter_min_length() {
-        let result = apply_filters("hi", Some("en"), None, no_spammer);
+        let result = apply_filters("hi", Some("en"), None, &no_media(), no_spammer);
         assert_eq!(result, FilterResult::Reject(Filter::MinLength));
     }
 
     #[test]
     fn test_filter_english_only() {
         let text = "This is a long enough text for testing purposes";
-        let result = apply_filters(text, Some("pt"), None, no_spammer);
+        let result = apply_filters(text, Some("pt"), None, &no_media(), no_spammer);
         assert_eq!(result, FilterResult::Reject(Filter::EnglishOnly));
 
-        let result_en = apply_filters(text, Some("en"), None, no_spammer);
+        let result_en = apply_filters(text, Some("en"), None, &no_media(), no_spammer);
         assert_eq!(result_en, FilterResult::Pass);
     }
 
     #[test]
     fn test_filter_blocked_keyword() {
         let text = "Check out my new NFT game collection";
-        let result = apply_filters(text, Some("en"), None, no_spammer);
+        let result = apply_filters(text, Some("en"), None, &no_media(), no_spammer);
         assert!(matches!(
             result,
             FilterResult::Reject(Filter::BlockedKeyword(_))
@@ -112,14 +138,59 @@ mod tests {
     fn test_filter_spammer() {
         let text = "This is a valid gamedev post about my project";
         let is_spammer = |did: &str| did == "did:plc:spammer123";
-        let result = apply_filters(text, Some("en"), Some("did:plc:spammer123"), is_spammer);
+        let result = apply_filters(
+            text,
+            Some("en"),
+            Some("did:plc:spammer123"),
+            &no_media(),
+            is_spammer,
+        );
         assert_eq!(result, FilterResult::Reject(Filter::Spammer));
+    }
+
+    #[test]
+    fn test_filter_promo_link() {
+        let text = "Check out my game on Steam! Really proud of it";
+        let media = MediaInfo {
+            external_uri: Some("https://store.steampowered.com/app/12345".to_string()),
+            ..Default::default()
+        };
+        let result = apply_filters(text, Some("en"), None, &media, no_spammer);
+        assert_eq!(result, FilterResult::Reject(Filter::PromoLink));
+    }
+
+    #[test]
+    fn test_filter_promo_link_in_facets() {
+        let text = "Wishlist my game now! Really excited about launch";
+        let media = MediaInfo {
+            facet_links: vec!["https://itch.io/game/test".to_string()],
+            ..Default::default()
+        };
+        let result = apply_filters(text, Some("en"), None, &media, no_spammer);
+        assert_eq!(result, FilterResult::Reject(Filter::PromoLink));
+    }
+
+    #[test]
+    fn test_filter_too_many_hashtags() {
+        let text = "My game #one #two #three #four #five #six #seven is great";
+        let result = apply_filters(text, Some("en"), None, &no_media(), no_spammer);
+        assert!(matches!(
+            result,
+            FilterResult::Reject(Filter::TooManyHashtags(7))
+        ));
+    }
+
+    #[test]
+    fn test_filter_hashtags_at_limit() {
+        let text = "My game #one #two #three #four #five #six is great";
+        let result = apply_filters(text, Some("en"), None, &no_media(), no_spammer);
+        assert_eq!(result, FilterResult::Pass);
     }
 
     #[test]
     fn test_filter_pass() {
         let text = "Just implemented a new combat system in my game #gamedev";
-        let result = apply_filters(text, Some("en"), None, no_spammer);
+        let result = apply_filters(text, Some("en"), None, &no_media(), no_spammer);
         assert_eq!(result, FilterResult::Pass);
     }
 }

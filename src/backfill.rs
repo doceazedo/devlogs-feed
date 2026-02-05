@@ -94,7 +94,11 @@ pub async fn run_backfill(pool: DbPool, ml_handle: &MLHandle) {
 
         let mut assessment = PostAssessment::new(text);
 
-        let filter_result = apply_filters(text, lang, Some(&post.author.did), |_| false);
+        let mut media_info = extract_media_from_embed(&post.embed);
+        media_info.facet_links = extract_facet_links(&post.record.facets);
+
+        let filter_result =
+            apply_filters(text, lang, Some(&post.author.did), &media_info, |_| false);
         assessment.set_filter_result(filter_result.clone());
         if matches!(filter_result, FilterResult::Reject(_)) {
             filtered += 1;
@@ -111,8 +115,6 @@ pub async fn run_backfill(pool: DbPool, ml_handle: &MLHandle) {
 
         let quality = ml_handle.score(text.clone()).await;
 
-        let mut media_info = extract_media_from_embed(&post.embed);
-        media_info.facet_links = extract_facet_links(&post.record.facets);
         let content = extract_content_signals(text, &media_info);
         assessment.set_content(content.clone(), media_info.clone());
 
@@ -120,6 +122,11 @@ pub async fn run_backfill(pool: DbPool, ml_handle: &MLHandle) {
         let priority = calculate_priority(&signals);
         assessment.set_priority(quality, signals, priority.clone());
         assessment.print();
+
+        if priority.priority < settings().scoring.rejection.min_priority {
+            filtered += 1;
+            continue;
+        }
 
         let new_post = NewPost::new(
             post.uri.clone(),

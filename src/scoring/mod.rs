@@ -5,10 +5,10 @@ pub mod priority;
 mod relevance;
 
 pub use classification::{MLHandle, QualityAssessment};
-pub use content::{extract_content_signals, ContentSignals, MediaInfo};
+pub use content::{extract_content_signals, is_promo_domain, ContentSignals, MediaInfo};
 pub use filters::{apply_filters, Filter, FilterResult};
 pub use priority::{calculate_priority, PriorityBreakdown, PrioritySignals};
-pub use relevance::{has_hashtags, has_keywords};
+pub use relevance::{count_all_hashtags, has_hashtags, has_keywords};
 
 #[cfg(test)]
 mod tests {
@@ -17,17 +17,18 @@ mod tests {
     #[test]
     fn test_filter_min_length() {
         let short_text = "hi";
-        let result = apply_filters(short_text, Some("en"), None, |_| false);
+        let result =
+            apply_filters(short_text, Some("en"), None, &MediaInfo::default(), |_| false);
         assert!(matches!(result, FilterResult::Reject(Filter::MinLength)));
     }
 
     #[test]
     fn test_filter_english_only() {
         let text = "This is a long enough text for testing";
-        let result = apply_filters(text, Some("pt"), None, |_| false);
+        let result = apply_filters(text, Some("pt"), None, &MediaInfo::default(), |_| false);
         assert!(matches!(result, FilterResult::Reject(Filter::EnglishOnly)));
 
-        let result_en = apply_filters(text, Some("en"), None, |_| false);
+        let result_en = apply_filters(text, Some("en"), None, &MediaInfo::default(), |_| false);
         assert!(matches!(result_en, FilterResult::Pass));
     }
 

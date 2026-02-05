@@ -40,6 +40,7 @@ pub struct Scoring {
     pub bonuses: ContentBonuses,
     pub penalties: ContentPenalties,
     pub quality: QualityThresholds,
+    pub rejection: RejectionThresholds,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -59,7 +60,12 @@ pub struct ContentPenalties {
     pub many_images: f32,
     pub many_images_threshold: u8,
     pub link_exponential_base: f32,
-    pub promo_link: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RejectionThresholds {
+    pub min_priority: f32,
+    pub max_hashtags: u8,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -135,12 +141,15 @@ impl Default for Settings {
                     many_images: 0.2,
                     many_images_threshold: 3,
                     link_exponential_base: 3.0,
-                    promo_link: 1.5,
                 },
                 quality: QualityThresholds {
                     poor_quality_penalty_min: 0.5,
                     good_quality_boost_min: 0.1,
                     engagement_boost_min: 0.05,
+                },
+                rejection: RejectionThresholds {
+                    min_priority: -5.0,
+                    max_hashtags: 6,
                 },
             },
             engagement: Engagement {
