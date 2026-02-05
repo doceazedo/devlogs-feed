@@ -33,7 +33,8 @@ fn contains_keyword(text: &str, keyword: &str) -> bool {
 }
 
 pub fn has_keywords(text: &str) -> (bool, usize) {
-    let keywords = &settings().filters.gamedev_keywords;
+    let s = settings();
+    let keywords = &s.filters.gamedev_keywords;
     let text_lower = text.to_lowercase();
     let count = keywords
         .iter()
@@ -43,7 +44,8 @@ pub fn has_keywords(text: &str) -> (bool, usize) {
 }
 
 pub fn has_hashtags(text: &str) -> (bool, usize) {
-    let hashtags = &settings().filters.gamedev_hashtags;
+    let s = settings();
+    let hashtags = &s.filters.gamedev_hashtags;
     let text_lower = text.to_lowercase();
     let text_hashtags: Vec<&str> = HASHTAG_PATTERN
         .find_iter(&text_lower)

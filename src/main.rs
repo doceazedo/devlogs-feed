@@ -34,6 +34,10 @@ async fn main() -> Result<()> {
 
     logs::log_init(&s.server.feed_hostname, port, s.server.enable_backfill);
 
+    if let Err(e) = settings::spawn_settings_watcher() {
+        eprintln!("warning: failed to start settings watcher: {e}");
+    }
+
     let pool = establish_pool(&database_url);
 
     {

@@ -31,3 +31,5 @@ strum = { version = "0.26", features = ["derive"] }
 tokio = { version = "1.49.0", features = ["full"] }
 urlencoding = "2"
 rand = "0.9"
+arc-swap = "1"
+notify = "7"

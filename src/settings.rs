@@ -1,9 +1,13 @@
+use arc_swap::{ArcSwap, Guard};
+use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
-static SETTINGS: OnceLock<Settings> = OnceLock::new();
+use crate::utils::logs;
+
+static SETTINGS: OnceLock<ArcSwap<Settings>> = OnceLock::new();
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
@@ -304,8 +308,10 @@ impl Default for Settings {
 }
 
 impl Settings {
-    pub fn load() -> &'static Settings {
-        SETTINGS.get_or_init(|| Self::load_from_files())
+    pub fn load() -> Guard<Arc<Settings>> {
+        SETTINGS
+            .get_or_init(|| ArcSwap::from_pointee(Self::load_from_files()))
+            .load()
     }
 
     fn load_from_files() -> Settings {
@@ -331,8 +337,82 @@ impl Settings {
 
         settings
     }
+
+    fn reload() {
+        let swap = SETTINGS.get_or_init(|| ArcSwap::from_pointee(Self::load_from_files()));
+        match Self::try_load_from_files() {
+            Ok(new_settings) => {
+                swap.store(Arc::new(new_settings));
+                logs::log_settings_reloaded();
+            }
+            Err(e) => {
+                logs::log_settings_reload_failed(&e);
+            }
+        }
+    }
+
+    fn try_load_from_files() -> Result<Settings, String> {
+        let default_path = Path::new("settings.default.ron");
+        let override_path = Path::new("settings.ron");
+
+        let mut settings = if default_path.exists() {
+            let content = fs::read_to_string(default_path)
+                .map_err(|e| format!("settings.default.ron: {e}"))?;
+            ron::from_str(&content).map_err(|e| format!("settings.default.ron: {e}"))?
+        } else {
+            Settings::default()
+        };
+
+        if override_path.exists() {
+            let content =
+                fs::read_to_string(override_path).map_err(|e| format!("settings.ron: {e}"))?;
+            settings =
+                ron::from_str::<Settings>(&content).map_err(|e| format!("settings.ron: {e}"))?;
+        }
+
+        Ok(settings)
+    }
 }
 
-pub fn settings() -> &'static Settings {
+pub fn settings() -> Guard<Arc<Settings>> {
     Settings::load()
+}
+
+pub fn spawn_settings_watcher() -> notify::Result<()> {
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<()>(1);
+
+    let mut watcher = RecommendedWatcher::new(
+        move |res: notify::Result<Event>| {
+            if let Ok(event) = res {
+                if matches!(
+                    event.kind,
+                    EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_)
+                ) {
+                    let _ = tx.try_send(());
+                }
+            }
+        },
+        notify::Config::default(),
+    )?;
+
+    let default_path = Path::new("settings.default.ron");
+    let override_path = Path::new("settings.ron");
+
+    if default_path.exists() {
+        watcher.watch(default_path, RecursiveMode::NonRecursive)?;
+    }
+    if override_path.exists() {
+        watcher.watch(override_path, RecursiveMode::NonRecursive)?;
+    }
+
+    tokio::spawn(async move {
+        let _watcher = watcher;
+        while rx.recv().await.is_some() {
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+            while rx.try_recv().is_ok() {}
+            Settings::reload();
+        }
+    });
+
+    Ok(())
 }

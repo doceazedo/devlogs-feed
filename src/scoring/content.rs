@@ -63,7 +63,8 @@ pub fn is_first_person(text: &str) -> bool {
 }
 
 pub fn count_links(text: &str) -> (u8, u8) {
-    let promo_domains = &settings().filters.promo_domains;
+    let s = settings();
+    let promo_domains = &s.filters.promo_domains;
     let text_lower = text.to_lowercase();
     let links: Vec<&str> = URL_PATTERN
         .find_iter(&text_lower)
@@ -90,7 +91,8 @@ pub fn count_links(text: &str) -> (u8, u8) {
 }
 
 pub fn is_promo_domain(url: &str) -> bool {
-    let promo_domains = &settings().filters.promo_domains;
+    let s = settings();
+    let promo_domains = &s.filters.promo_domains;
     let url_lower = url.to_lowercase();
     if let Some(domain_start) = url_lower.find("://") {
         let domain_part = &url_lower[domain_start + 3..];

@@ -566,6 +566,19 @@ fn truncate_did(did: &str) -> String {
     }
 }
 
+pub fn log_settings_reloaded() {
+    println!("{} settings reloaded.", blue().apply_to("[SETTINGS]"),);
+}
+
+pub fn log_settings_reload_failed(error: &str) {
+    println!(
+        "{} {} {}",
+        yellow().apply_to("[SETTINGS]"),
+        red().apply_to("reload failed:"),
+        dim().apply_to(error)
+    );
+}
+
 pub fn log_interactions_received(user_did: &str, count: usize) {
     println!(
         "{} {} interactions from {}",
