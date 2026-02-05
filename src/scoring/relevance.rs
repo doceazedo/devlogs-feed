@@ -41,9 +41,13 @@ pub fn has_keywords(text: &str) -> (bool, usize) {
 pub fn has_hashtags(text: &str) -> (bool, usize) {
     let hashtags = &settings().filters.gamedev_hashtags;
     let text_lower = text.to_lowercase();
+    let text_hashtags: Vec<&str> = HASHTAG_PATTERN
+        .find_iter(&text_lower)
+        .map(|m| m.as_str())
+        .collect();
     let count = hashtags
         .iter()
-        .filter(|tag| text_lower.contains(tag.as_str()))
+        .filter(|tag| text_hashtags.iter().any(|h| *h == tag.as_str()))
         .count();
     (count > 0, count)
 }
@@ -69,6 +73,12 @@ mod tests {
     #[test]
     fn test_keyword_substring_matching() {
         let (found, _) = has_keywords("Community radio pioneers since 1996");
+        assert!(!found);
+    }
+
+    #[test]
+    fn test_hashtag_substring_match() {
+        let (found, _) = has_hashtags("Rust Belt homeowners! #RustBeltLiving #PropertyValue");
         assert!(!found);
     }
 
