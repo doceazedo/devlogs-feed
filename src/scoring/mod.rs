@@ -9,14 +9,11 @@ mod semantic;
 pub use classification::{label_boost, MLHandle, MLScores};
 pub use content::{extract_content_signals, ContentSignals, MediaInfo};
 pub use filters::{apply_filters, apply_ml_filter, Filter, FilterResult};
-pub use priority::{
-    calculate_priority, PriorityBreakdown, PrioritySignals, BONUS_FIRST_PERSON,
-    BONUS_IMAGE_WITH_ALT, BONUS_VIDEO, MANY_IMAGES_THRESHOLD, PENALTY_MANY_IMAGES,
-    PENALTY_PROMO_LINK,
-};
+pub use priority::{calculate_priority, PriorityBreakdown, PrioritySignals};
 pub use relevance::{has_hashtags, has_keywords};
-pub use score::{calculate_score, ScoreBreakdown, SCORE_THRESHOLD};
+pub use score::{calculate_score, ScoreBreakdown};
 
+use crate::settings::settings;
 use chrono::{DateTime, Utc};
 
 pub struct EvaluationResult {
@@ -98,12 +95,10 @@ pub async fn evaluate_post(text: &str, media: MediaInfo, ml_handle: &MLHandle) -
     }
 }
 
-pub const DECAY_EVERY_X_HOURS: f32 = 2.0;
-pub const DECAY_FACTOR: f32 = 0.75;
-
 pub fn apply_time_decay(score: f32, post_time: DateTime<Utc>, now: DateTime<Utc>) -> f32 {
+    let s = settings();
     let hours_old = (now - post_time).num_seconds() as f32 / 3600.0;
-    let decay = DECAY_FACTOR.powf(hours_old / DECAY_EVERY_X_HOURS);
+    let decay = s.decay.factor.powf(hours_old / s.decay.every_x_hours);
     score * decay
 }
 

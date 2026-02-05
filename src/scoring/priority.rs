@@ -1,25 +1,7 @@
 use super::score::ScoreBreakdown;
+use crate::settings::settings;
 use crate::utils::logs::{dim, format_signed, pad_label};
 use strum::Display;
-
-pub const POOR_QUALITY_PENALTY_MIN: f32 = 0.5;
-pub const GOOD_QUALITY_BOOST_MIN: f32 = 0.1;
-pub const ENGAGEMENT_BOOST_MIN: f32 = 0.05;
-
-pub const BONUS_FIRST_PERSON: f32 = 0.2;
-pub const BONUS_VIDEO: f32 = 0.1;
-pub const BONUS_IMAGE_WITH_ALT: f32 = 0.1;
-pub const PENALTY_MANY_IMAGES: f32 = 0.2;
-pub const PENALTY_LINK_EXPO: f32 = 3.0;
-pub const PENALTY_PROMO_LINK: f32 = 1.5;
-
-pub const MANY_IMAGES_THRESHOLD: u8 = 3;
-
-pub const REPLY_WEIGHT: f32 = 3.0;
-pub const REPOST_WEIGHT: f32 = 2.0;
-pub const LIKE_WEIGHT: f32 = 1.0;
-pub const VELOCITY_SCALE: f32 = 0.1;
-pub const MAX_ENGAGEMENT_BOOST: f32 = 0.5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Display)]
 pub enum ConfidenceTier {
@@ -34,16 +16,13 @@ pub enum ConfidenceTier {
 }
 
 impl ConfidenceTier {
-    pub const STRONG_THRESHOLD: f32 = 0.85;
-    pub const HIGH_THRESHOLD: f32 = 0.70;
-    pub const MODERATE_THRESHOLD: f32 = 0.50;
-
     pub fn from_score(score: f32) -> Self {
-        if score >= Self::STRONG_THRESHOLD {
+        let conf = &settings().scoring.confidence;
+        if score >= conf.strong {
             ConfidenceTier::Strong
-        } else if score >= Self::HIGH_THRESHOLD {
+        } else if score >= conf.high {
             ConfidenceTier::High
-        } else if score >= Self::MODERATE_THRESHOLD {
+        } else if score >= conf.moderate {
             ConfidenceTier::Moderate
         } else {
             ConfidenceTier::Low
@@ -105,12 +84,13 @@ impl Default for PriorityBreakdown {
 }
 
 pub fn calculate_priority(score: &ScoreBreakdown, signals: &PrioritySignals) -> PriorityBreakdown {
+    let s = settings();
     let mut boosts = Vec::new();
     let mut penalties = Vec::new();
 
     let mut quality_penalty = 0.0;
 
-    if signals.engagement_bait_score >= POOR_QUALITY_PENALTY_MIN {
+    if signals.engagement_bait_score >= s.scoring.quality.poor_quality_penalty_min {
         quality_penalty += signals.engagement_bait_score;
         penalties.push(format!(
             "{}{}",
@@ -119,7 +99,7 @@ pub fn calculate_priority(score: &ScoreBreakdown, signals: &PrioritySignals) -> 
         ));
     }
 
-    if signals.synthetic_score >= POOR_QUALITY_PENALTY_MIN {
+    if signals.synthetic_score >= s.scoring.quality.poor_quality_penalty_min {
         quality_penalty += signals.synthetic_score;
         penalties.push(format!(
             "{}{}",
@@ -131,44 +111,48 @@ pub fn calculate_priority(score: &ScoreBreakdown, signals: &PrioritySignals) -> 
     let mut content_modifier = 0.0;
 
     if signals.is_first_person {
-        content_modifier += BONUS_FIRST_PERSON;
+        content_modifier += s.scoring.bonuses.first_person;
         boosts.push(format!(
             "{}{}",
             pad_label("first-person:", 2),
-            format_signed(BONUS_FIRST_PERSON),
+            format_signed(s.scoring.bonuses.first_person),
         ));
     }
 
     if signals.has_video {
-        content_modifier += BONUS_VIDEO;
+        content_modifier += s.scoring.bonuses.video;
         boosts.push(format!(
             "{}{}",
             pad_label("video:", 2),
-            format_signed(BONUS_VIDEO),
+            format_signed(s.scoring.bonuses.video),
         ));
     }
 
     if signals.images > 0 && signals.has_alt_text {
-        content_modifier += BONUS_IMAGE_WITH_ALT;
+        content_modifier += s.scoring.bonuses.image_with_alt;
         boosts.push(format!(
             "{}{}",
             pad_label("alt-text:", 2),
-            format_signed(BONUS_IMAGE_WITH_ALT),
+            format_signed(s.scoring.bonuses.image_with_alt),
         ));
     }
 
-    if signals.images >= MANY_IMAGES_THRESHOLD {
-        content_modifier -= PENALTY_MANY_IMAGES;
+    if signals.images >= s.scoring.penalties.many_images_threshold {
+        content_modifier -= s.scoring.penalties.many_images;
         penalties.push(format!(
             "{}{} {}",
             pad_label("images:", 2),
-            format_signed(PENALTY_MANY_IMAGES),
+            format_signed(s.scoring.penalties.many_images),
             dim().apply_to(format!("({})", signals.images))
         ));
     }
 
     if signals.link_count > 0 {
-        let link_penalty = PENALTY_LINK_EXPO.powi(signals.link_count as i32);
+        let link_penalty = s
+            .scoring
+            .penalties
+            .link_exponential_base
+            .powi(signals.link_count as i32);
         content_modifier -= link_penalty;
         penalties.push(format!(
             "{}{} {}",
@@ -179,7 +163,7 @@ pub fn calculate_priority(score: &ScoreBreakdown, signals: &PrioritySignals) -> 
     }
 
     if signals.promo_link_count > 0 {
-        let promo_penalty = signals.promo_link_count as f32 * PENALTY_PROMO_LINK;
+        let promo_penalty = signals.promo_link_count as f32 * s.scoring.penalties.promo_link;
         content_modifier -= promo_penalty;
         penalties.push(format!(
             "{}{} {}",
@@ -190,7 +174,7 @@ pub fn calculate_priority(score: &ScoreBreakdown, signals: &PrioritySignals) -> 
     }
 
     let engagement_boost = calculate_engagement_boost(signals);
-    if engagement_boost >= ENGAGEMENT_BOOST_MIN {
+    if engagement_boost >= s.scoring.quality.engagement_boost_min {
         boosts.push(format!(
             "{}{}",
             pad_label("trending:", 2),
@@ -199,7 +183,7 @@ pub fn calculate_priority(score: &ScoreBreakdown, signals: &PrioritySignals) -> 
     }
 
     let authenticity_boost = signals.authenticity_score;
-    if authenticity_boost >= GOOD_QUALITY_BOOST_MIN {
+    if authenticity_boost >= s.scoring.quality.good_quality_boost_min {
         boosts.push(format!(
             "{}{}",
             pad_label("authentic:", 2),
@@ -235,13 +219,15 @@ pub fn calculate_priority(score: &ScoreBreakdown, signals: &PrioritySignals) -> 
 }
 
 fn calculate_engagement_boost(signals: &PrioritySignals) -> f32 {
+    let s = settings();
     if signals.engagement_velocity > 0.0 {
-        (signals.engagement_velocity.ln_1p() * VELOCITY_SCALE).min(MAX_ENGAGEMENT_BOOST)
+        (signals.engagement_velocity.ln_1p() * s.engagement.velocity_scale)
+            .min(s.engagement.max_boost)
     } else {
-        let weighted = signals.reply_count as f32 * REPLY_WEIGHT
-            + signals.repost_count as f32 * REPOST_WEIGHT
-            + signals.like_count as f32 * LIKE_WEIGHT;
-        (weighted.ln_1p() * VELOCITY_SCALE).min(MAX_ENGAGEMENT_BOOST)
+        let weighted = signals.reply_count as f32 * s.engagement.weights.reply
+            + signals.repost_count as f32 * s.engagement.weights.repost
+            + signals.like_count as f32 * s.engagement.weights.like;
+        (weighted.ln_1p() * s.engagement.velocity_scale).min(s.engagement.max_boost)
     }
 }
 

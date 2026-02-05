@@ -10,3 +10,4 @@ target
 *.db-wal
 data/
 cache/
+settings.ron

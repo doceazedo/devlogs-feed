@@ -1,29 +1,8 @@
+use crate::settings::settings;
 use regex::Regex;
 use std::sync::LazyLock;
 
 const FIRST_PERSON: &[&str] = &["i ", "i'", "we ", "we'", "my ", "our "];
-
-const PROMO_DOMAINS: &[&str] = &[
-    "store.steampowered.com",
-    "steampowered.com",
-    "itch.io",
-    "twitch.tv",
-    "fiverr.com",
-    "kickstarter.com",
-    "indiegogo.com",
-    "patreon.com",
-    "ko-fi.com",
-    "buymeacoffee.com",
-    "gog.com",
-    "epicgames.com",
-    "humblebundle.com",
-    "gamejolt.com",
-    "youtube.com",
-    "youtu.be",
-    "playtester.io",
-    "buff.ly",
-    "bit.ly",
-];
 
 static URL_PATTERN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"https?://[^\s]+").unwrap());
 
@@ -84,6 +63,7 @@ pub fn is_first_person(text: &str) -> bool {
 }
 
 pub fn count_links(text: &str) -> (u8, u8) {
+    let promo_domains = &settings().filters.promo_domains;
     let text_lower = text.to_lowercase();
     let links: Vec<&str> = URL_PATTERN
         .find_iter(&text_lower)
@@ -98,7 +78,7 @@ pub fn count_links(text: &str) -> (u8, u8) {
                 let domain_part = &url[domain_start + 3..];
                 let domain_end = domain_part.find('/').unwrap_or(domain_part.len());
                 let domain = &domain_part[..domain_end];
-                PROMO_DOMAINS.iter().any(|d| domain.contains(d))
+                promo_domains.iter().any(|d| domain.contains(d))
             } else {
                 false
             }
@@ -110,12 +90,13 @@ pub fn count_links(text: &str) -> (u8, u8) {
 }
 
 pub fn is_promo_domain(url: &str) -> bool {
+    let promo_domains = &settings().filters.promo_domains;
     let url_lower = url.to_lowercase();
     if let Some(domain_start) = url_lower.find("://") {
         let domain_part = &url_lower[domain_start + 3..];
         let domain_end = domain_part.find('/').unwrap_or(domain_part.len());
         let domain = &domain_part[..domain_end];
-        PROMO_DOMAINS.iter().any(|d| domain.contains(d))
+        promo_domains.iter().any(|d| domain.contains(d))
     } else {
         false
     }

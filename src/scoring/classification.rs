@@ -7,9 +7,7 @@ use std::time::Duration;
 use strum::{Display, EnumIter, IntoEnumIterator, IntoStaticStr};
 
 use super::semantic::{compute_reference_embeddings, semantic_similarity_batch};
-
-pub const ML_BATCH_SIZE: usize = 16;
-pub const ML_BATCH_TIMEOUT_MS: u64 = 10;
+use crate::settings::settings;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Display, EnumIter, IntoStaticStr)]
 pub enum TopicLabel {
@@ -40,10 +38,11 @@ impl TopicLabel {
     }
 
     pub fn boost(&self) -> f32 {
+        let boosts = &settings().scoring.topic_boosts;
         match self {
-            Self::GameDevSharingWork => 0.4,
-            Self::GameDevRant => 0.6,
-            Self::GameProgramming => 0.2,
+            Self::GameDevSharingWork => boosts.game_dev_sharing_work,
+            Self::GameDevRant => boosts.game_dev_rant,
+            Self::GameProgramming => boosts.game_programming,
             _ => 0.0,
         }
     }
@@ -78,7 +77,7 @@ impl FromStr for TopicLabel {
 pub fn label_boost(label: &str) -> f32 {
     TopicLabel::from_str(label)
         .map(|l| l.boost())
-        .unwrap_or(0.6)
+        .unwrap_or(settings().scoring.topic_boosts.default)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Display, EnumIter, IntoStaticStr)]
@@ -169,7 +168,8 @@ impl MLHandle {
 fn run_ml_worker(request_rx: mpsc::Receiver<MLRequest>) -> Result<()> {
     let classifier = ZeroShotClassificationModel::new(Default::default())?;
     let (embeddings, reference_embeddings) = compute_reference_embeddings()?;
-    let batch_timeout = Duration::from_millis(ML_BATCH_TIMEOUT_MS);
+    let s = settings();
+    let batch_timeout = Duration::from_millis(s.ml.batch_timeout_ms);
 
     loop {
         let mut batch: Vec<(String, tokio::sync::oneshot::Sender<MLScores>)> = Vec::new();
@@ -181,7 +181,7 @@ fn run_ml_worker(request_rx: mpsc::Receiver<MLRequest>) -> Result<()> {
             Err(_) => break,
         }
 
-        while batch.len() < ML_BATCH_SIZE {
+        while batch.len() < s.ml.batch_size {
             match request_rx.recv_timeout(batch_timeout) {
                 Ok(MLRequest::Score { text, response_tx }) => {
                     batch.push((text, response_tx));
@@ -206,7 +206,8 @@ fn run_ml_worker(request_rx: mpsc::Receiver<MLRequest>) -> Result<()> {
             let quality = qualities.get(i).cloned().unwrap_or_default();
             let (semantic_score, best_ref_idx) = semantics.get(i).copied().unwrap_or((0.0, 0));
 
-            let negative_rejection = topic.is_negative_label && topic.best_label_score >= 0.85;
+            let negative_rejection = topic.is_negative_label
+                && topic.best_label_score >= s.scoring.thresholds.ml_rejection;
 
             let _ = response_tx.send(MLScores {
                 classification_score: topic.score,

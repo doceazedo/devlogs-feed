@@ -1,3 +1,4 @@
+use crate::settings::settings;
 use regex::Regex;
 use std::sync::LazyLock;
 
@@ -7,63 +8,6 @@ static HASHTAG_PATTERN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"#\w+").u
 pub fn strip_hashtags(text: &str) -> String {
     HASHTAG_PATTERN.replace_all(text, "").trim().to_string()
 }
-
-pub const GAMEDEV_KEYWORDS: &[&str] = &[
-    "gamedev",
-    "game dev",
-    "game development",
-    "game animation",
-    "game art",
-    "game audio",
-    "game design",
-    "indiedev",
-    "indie dev",
-    "devlog",
-    "game jam",
-    "gamejam",
-    "ue5",
-    "ue4",
-    "godot",
-    "gamemaker",
-    "rpg maker",
-    "defold",
-    "monogame",
-    "libgdx",
-    "phaser",
-    "pygame",
-    "love2d",
-    "macroquad",
-    "raylib",
-    "sdl",
-    "sfml",
-    "aseprite",
-    "fmod",
-    "wwise",
-    "game engine",
-    "environment design",
-    "level design",
-    "level editor",
-    "glsl",
-    "wgsl",
-];
-
-pub const GAMEDEV_HASHTAGS: &[&str] = &[
-    "#gamedev",
-    "#indiedev",
-    "#indiegame",
-    "#indiegames",
-    "#screenshotsaturday",
-    "#madewithunity",
-    "#madewithgodot",
-    "#madewithunreal",
-    "#godot",
-    "#bevy",
-    "#pixelart",
-    "#devlog",
-    "#gamedevelopment",
-    "#rust",
-    "#rustlang",
-];
 
 fn contains_keyword(text: &str, keyword: &str) -> bool {
     let keyword_parts: Vec<&str> = WORD_SPLIT
@@ -85,8 +29,9 @@ fn contains_keyword(text: &str, keyword: &str) -> bool {
 }
 
 pub fn has_keywords(text: &str) -> (bool, usize) {
+    let keywords = &settings().filters.gamedev_keywords;
     let text_lower = text.to_lowercase();
-    let count = GAMEDEV_KEYWORDS
+    let count = keywords
         .iter()
         .filter(|kw| contains_keyword(&text_lower, kw))
         .count();
@@ -94,10 +39,11 @@ pub fn has_keywords(text: &str) -> (bool, usize) {
 }
 
 pub fn has_hashtags(text: &str) -> (bool, usize) {
+    let hashtags = &settings().filters.gamedev_hashtags;
     let text_lower = text.to_lowercase();
-    let count = GAMEDEV_HASHTAGS
+    let count = hashtags
         .iter()
-        .filter(|tag| text_lower.contains(*tag))
+        .filter(|tag| text_lower.contains(tag.as_str()))
         .count();
     (count > 0, count)
 }

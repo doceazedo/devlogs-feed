@@ -1,15 +1,9 @@
 use crate::db::DbPool;
 use crate::schema::{engagement_cache, replies, reposts, spammers};
+use crate::settings::settings;
 use chrono::Utc;
 use diesel::prelude::*;
 use diesel::result::Error as DieselError;
-
-const SPAM_REPOST_THRESHOLD: f32 = 10.0;
-const VELOCITY_WINDOW_HOURS: i64 = 1;
-
-pub const REPLY_WEIGHT: f32 = 3.0;
-pub const REPOST_WEIGHT: f32 = 2.0;
-pub const LIKE_WEIGHT: f32 = 1.0;
 
 #[derive(Debug)]
 #[allow(dead_code)]
@@ -140,8 +134,9 @@ impl EngagementTracker {
         conn: &mut diesel::SqliteConnection,
         reposter_did: &str,
     ) -> Option<SpamDetected> {
+        let s = settings();
         let now = Utc::now().timestamp();
-        let window_start = now - (VELOCITY_WINDOW_HOURS * 3600);
+        let window_start = now - (s.spam.velocity_window_hours * 3600);
 
         let recent_count: i64 = reposts::table
             .filter(reposts::reposter_did.eq(reposter_did))
@@ -150,9 +145,9 @@ impl EngagementTracker {
             .get_result(conn)
             .unwrap_or(0);
 
-        let frequency = recent_count as f32 / VELOCITY_WINDOW_HOURS as f32;
+        let frequency = recent_count as f32 / s.spam.velocity_window_hours as f32;
 
-        if frequency >= SPAM_REPOST_THRESHOLD {
+        if frequency >= s.spam.repost_threshold {
             return Some(SpamDetected {
                 did: reposter_did.to_string(),
                 reason: format!("high repost frequency: {:.1}/hr", frequency),
@@ -168,8 +163,9 @@ impl EngagementTracker {
         conn: &mut diesel::SqliteConnection,
         post_uri: &str,
     ) -> Result<(), DieselError> {
+        let s = settings();
         let now = Utc::now().timestamp();
-        let window_start = now - (VELOCITY_WINDOW_HOURS * 3600);
+        let window_start = now - (s.spam.velocity_window_hours * 3600);
 
         let reply_count: i64 = replies::table
             .filter(replies::post_uri.eq(post_uri))
@@ -203,9 +199,9 @@ impl EngagementTracker {
             .get_result(conn)
             .unwrap_or(0);
 
-        let velocity = recent_replies as f32 * REPLY_WEIGHT
-            + recent_reposts as f32 * REPOST_WEIGHT
-            + like_count as f32 * LIKE_WEIGHT * 0.1;
+        let velocity = recent_replies as f32 * s.engagement.weights.reply
+            + recent_reposts as f32 * s.engagement.weights.repost
+            + like_count as f32 * s.engagement.weights.like * 0.1;
 
         let entry = EngagementCacheEntry {
             post_uri: post_uri.to_string(),
@@ -309,7 +305,10 @@ mod tests {
 
     #[test]
     fn test_velocity_calculation() {
-        let velocity = 5.0 * REPLY_WEIGHT + 3.0 * REPOST_WEIGHT + 10.0 * LIKE_WEIGHT * 0.1;
+        let s = settings();
+        let velocity = 5.0 * s.engagement.weights.reply
+            + 3.0 * s.engagement.weights.repost
+            + 10.0 * s.engagement.weights.like * 0.1;
         assert!((velocity - 22.0).abs() < 0.01);
     }
 }

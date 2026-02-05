@@ -3,15 +3,15 @@ use crate::scoring::{
     apply_filters, apply_ml_filter, calculate_priority, calculate_score, extract_content_signals,
     has_hashtags, has_keywords, label_boost, FilterResult, MLHandle, MediaInfo, PrioritySignals,
 };
+use crate::settings::settings;
 use crate::utils::bluesky::{create_session, extract_facet_links, search_posts, SearchPost};
 use crate::utils::logs::{self, PostAssessment};
 use chrono::Utc;
 
-pub const BACKFILL_LIMIT: usize = 200;
-pub const BACKFILL_HOURS: i64 = 96;
 const SEARCH_LIMIT: u32 = 50;
 
 pub async fn run_backfill(pool: DbPool, ml_handle: &MLHandle) {
+    let s = settings();
     logs::log_backfill_start();
 
     let client = reqwest::Client::new();
@@ -25,7 +25,7 @@ pub async fn run_backfill(pool: DbPool, ml_handle: &MLHandle) {
     };
 
     let search_queries = vec!["gamedev", "indiedev", "devlog", "game development"];
-    let since = (Utc::now() - chrono::Duration::hours(BACKFILL_HOURS))
+    let since = (Utc::now() - chrono::Duration::hours(s.backfill.hours))
         .format("%Y-%m-%dT%H:%M:%SZ")
         .to_string();
 
@@ -42,7 +42,7 @@ pub async fn run_backfill(pool: DbPool, ml_handle: &MLHandle) {
             }
         }
 
-        if all_posts.len() >= BACKFILL_LIMIT {
+        if all_posts.len() >= s.backfill.limit {
             break;
         }
     }
@@ -57,7 +57,7 @@ pub async fn run_backfill(pool: DbPool, ml_handle: &MLHandle) {
         Err(_) => return,
     };
 
-    let total_to_process = all_posts.len().min(BACKFILL_LIMIT);
+    let total_to_process = all_posts.len().min(s.backfill.limit);
     let mut new_posts: Vec<NewPost> = Vec::new();
     let mut current = 0;
     let mut processed = 0;
@@ -67,7 +67,7 @@ pub async fn run_backfill(pool: DbPool, ml_handle: &MLHandle) {
     let mut ml_rejected = 0;
     let mut below_threshold = 0;
 
-    for post in all_posts.iter().take(BACKFILL_LIMIT) {
+    for post in all_posts.iter().take(s.backfill.limit) {
         current += 1;
         logs::log_backfill_progress(current, total_to_process);
 
@@ -181,7 +181,7 @@ pub async fn run_backfill(pool: DbPool, ml_handle: &MLHandle) {
 
             new_posts.push(new_post);
 
-            if new_posts.len() >= BACKFILL_LIMIT {
+            if new_posts.len() >= s.backfill.limit {
                 break;
             }
         } else {

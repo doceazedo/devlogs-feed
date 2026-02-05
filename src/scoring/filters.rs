@@ -1,8 +1,6 @@
 use super::relevance::strip_hashtags;
+use crate::settings::settings;
 use strum::Display;
-
-pub const MIN_TEXT_LENGTH: usize = 20;
-pub const ML_REJECTION_THRESHOLD: f32 = 0.85;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum FilterResult {
@@ -26,48 +24,15 @@ pub enum Filter {
     Spammer,
 }
 
-const BLOCKED_KEYWORDS: &[&str] = &[
-    "crypto",
-    "nft",
-    "web3",
-    "blockchain",
-    "mint",
-    "airdrop",
-    "whitelist",
-    "rugpull",
-    "solana",
-    "ethereum",
-    "bitcoin",
-    "token sale",
-    "ico",
-    "hodl",
-];
-
-const BLOCKED_HASHTAGS: &[&str] = &[
-    "#nft",
-    "#nfts",
-    "#nftart",
-    "#nftgaming",
-    "#crypto",
-    "#cryptocurrency",
-    "#web3",
-    "#web3gaming",
-    "#blockchain",
-    "#freemint",
-    "#airdrop",
-    "#solana",
-    "#ethereum",
-    "#bitcoin",
-];
-
 pub fn apply_filters(
     text: &str,
     lang: Option<&str>,
     author_did: Option<&str>,
     spammer_check: impl Fn(&str) -> bool,
 ) -> FilterResult {
+    let s = settings();
     let stripped = strip_hashtags(text);
-    if stripped.len() < MIN_TEXT_LENGTH {
+    if stripped.len() < s.scoring.thresholds.min_text_length {
         return FilterResult::Reject(Filter::MinLength);
     }
 
@@ -79,13 +44,13 @@ pub fn apply_filters(
 
     let text_lower = text.to_lowercase();
 
-    for keyword in BLOCKED_KEYWORDS {
+    for keyword in &s.filters.blocked_keywords {
         if text_lower.contains(keyword) {
             return FilterResult::Reject(Filter::BlockedKeyword(keyword.to_string()));
         }
     }
 
-    for hashtag in BLOCKED_HASHTAGS {
+    for hashtag in &s.filters.blocked_hashtags {
         if text_lower.contains(hashtag) {
             return FilterResult::Reject(Filter::BlockedHashtag(hashtag.to_string()));
         }
@@ -101,7 +66,7 @@ pub fn apply_filters(
 }
 
 pub fn apply_ml_filter(best_label: &str, best_label_score: f32, is_negative: bool) -> FilterResult {
-    if is_negative && best_label_score >= ML_REJECTION_THRESHOLD {
+    if is_negative && best_label_score >= settings().scoring.thresholds.ml_rejection {
         return FilterResult::Reject(Filter::HighConfidenceNegative(best_label.to_string()));
     }
     FilterResult::Pass
@@ -145,7 +110,11 @@ mod tests {
     fn test_filter_blocked_hashtag() {
         let text_lower = "working on my game project today #gamedev #nftart".to_lowercase();
         assert!(text_lower.contains("#nftart"));
-        assert!(BLOCKED_HASHTAGS.iter().any(|h| text_lower.contains(h)));
+        assert!(settings()
+            .filters
+            .blocked_hashtags
+            .iter()
+            .any(|h| text_lower.contains(h)));
     }
 
     #[test]

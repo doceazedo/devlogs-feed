@@ -1,6 +1,4 @@
-pub const TOPIC_WEIGHT: f32 = 0.8;
-pub const SEMANTIC_WEIGHT: f32 = 0.20;
-pub const SCORE_THRESHOLD: f32 = 0.50;
+use crate::settings::settings;
 
 #[derive(Debug, Clone, Default)]
 pub struct ScoreBreakdown {
@@ -11,12 +9,14 @@ pub struct ScoreBreakdown {
 
 impl ScoreBreakdown {
     pub fn passes_threshold(&self) -> bool {
-        self.final_score >= SCORE_THRESHOLD
+        self.final_score >= settings().scoring.thresholds.score
     }
 }
 
 pub fn calculate_score(classification_score: f32, semantic_score: f32) -> ScoreBreakdown {
-    let final_score = classification_score * TOPIC_WEIGHT + semantic_score * SEMANTIC_WEIGHT;
+    let s = settings();
+    let final_score = classification_score * s.scoring.weights.topic
+        + semantic_score * s.scoring.weights.semantic;
 
     ScoreBreakdown {
         classification_score,
@@ -31,8 +31,9 @@ mod tests {
 
     #[test]
     fn test_score_calculation() {
+        let s = settings();
         let score = calculate_score(1.0, 1.0);
-        let expected = TOPIC_WEIGHT + SEMANTIC_WEIGHT;
+        let expected = s.scoring.weights.topic + s.scoring.weights.semantic;
         assert!((score.final_score - expected).abs() < 0.01);
     }
 
@@ -47,17 +48,18 @@ mod tests {
 
     #[test]
     fn test_threshold_boundary() {
+        let s = settings();
         let at_threshold = ScoreBreakdown {
             classification_score: 0.0,
             semantic_score: 0.0,
-            final_score: SCORE_THRESHOLD,
+            final_score: s.scoring.thresholds.score,
         };
         assert!(at_threshold.passes_threshold());
 
         let below_threshold = ScoreBreakdown {
             classification_score: 0.0,
             semantic_score: 0.0,
-            final_score: SCORE_THRESHOLD - 0.01,
+            final_score: s.scoring.thresholds.score - 0.01,
         };
         assert!(!below_threshold.passes_threshold());
     }

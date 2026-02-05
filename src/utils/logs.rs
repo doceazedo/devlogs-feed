@@ -1,11 +1,10 @@
 use console::{measure_text_width, Style};
 
-use crate::scoring::priority::{GOOD_QUALITY_BOOST_MIN, POOR_QUALITY_PENALTY_MIN};
-use crate::scoring::score::{SEMANTIC_WEIGHT, TOPIC_WEIGHT};
 use crate::scoring::{
     ContentSignals, Filter, FilterResult, MLScores, MediaInfo, PriorityBreakdown, PrioritySignals,
-    ScoreBreakdown, SCORE_THRESHOLD,
+    ScoreBreakdown,
 };
+use crate::settings::settings;
 
 pub const TREE_BRANCH: char = '\u{251C}';
 pub const TREE_END: char = '\u{2514}';
@@ -381,12 +380,13 @@ impl PostAssessment {
 
             lines.push(String::new());
             lines.push(format!("{}", bold().apply_to("SCORE")));
+            let s = settings();
             lines.push(format!(
                 "{}{} {:.0}% {}",
                 tree_branch(),
                 pad_label("topic", 1),
                 score.classification_score * 100.0,
-                dim().apply_to(format!("(weight: {:.1})", TOPIC_WEIGHT))
+                dim().apply_to(format!("(weight: {:.1})", s.scoring.weights.topic))
             ));
             lines.push(format!(
                 "{}{} {:.0}% {} {}",
@@ -394,9 +394,9 @@ impl PostAssessment {
                 pad_label("semantic", 1),
                 score.semantic_score * 100.0,
                 dim().apply_to(format!("(idx: {})", ml.best_reference_idx)),
-                dim().apply_to(format!("(weight: {:.1})", SEMANTIC_WEIGHT))
+                dim().apply_to(format!("(weight: {:.1})", s.scoring.weights.semantic))
             ));
-            let threshold_style = if score.final_score >= SCORE_THRESHOLD {
+            let threshold_style = if score.final_score >= s.scoring.thresholds.score {
                 green().dim()
             } else {
                 red().dim()
@@ -404,10 +404,10 @@ impl PostAssessment {
             let score_str = format!(
                 "{} {}",
                 bold().apply_to(format!("{:.2}", score.final_score)),
-                threshold_style.apply_to(if score.final_score >= SCORE_THRESHOLD {
-                    format!("(>={})", SCORE_THRESHOLD)
+                threshold_style.apply_to(if score.final_score >= s.scoring.thresholds.score {
+                    format!("(>={})", s.scoring.thresholds.score)
                 } else {
-                    format!("(<{})", SCORE_THRESHOLD)
+                    format!("(<{})", s.scoring.thresholds.score)
                 })
             );
             lines.push(format!(
@@ -421,22 +421,25 @@ impl PostAssessment {
             lines.push(format!("{}", bold().apply_to("QUALITY")));
 
             let quality = &ml.quality;
-            let bait_style = if quality.engagement_bait_score >= POOR_QUALITY_PENALTY_MIN {
-                yellow()
-            } else {
-                dim()
-            };
-            let synth_style = if quality.synthetic_score >= POOR_QUALITY_PENALTY_MIN {
-                yellow()
-            } else {
-                dim()
-            };
+            let bait_style =
+                if quality.engagement_bait_score >= s.scoring.quality.poor_quality_penalty_min {
+                    yellow()
+                } else {
+                    dim()
+                };
+            let synth_style =
+                if quality.synthetic_score >= s.scoring.quality.poor_quality_penalty_min {
+                    yellow()
+                } else {
+                    dim()
+                };
 
-            let auth_style = if quality.authenticity_score >= GOOD_QUALITY_BOOST_MIN {
-                green()
-            } else {
-                dim()
-            };
+            let auth_style =
+                if quality.authenticity_score >= s.scoring.quality.good_quality_boost_min {
+                    green()
+                } else {
+                    dim()
+                };
 
             lines.push(format!(
                 "{}{} {}",
@@ -597,7 +600,11 @@ impl PostAssessment {
                     format!("ml classification ({})", label)
                 }
                 Some(AssessmentResult::BelowThreshold(p)) => {
-                    format!("below threshold ({:.2} < {})", p, SCORE_THRESHOLD)
+                    format!(
+                        "below threshold ({:.2} < {})",
+                        p,
+                        settings().scoring.thresholds.score
+                    )
                 }
                 _ => "unknown".into(),
             };

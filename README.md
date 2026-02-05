@@ -14,17 +14,28 @@ You will need [Rust toolchain](https://rust-lang.org/tools/install/) and Diesel 
 
 ```bash
 cp .env.example .env
+cp settings.default.ron settings.ron # optional
 ```
+
+You can create/edit the `settings.ron` file to configure your feed. Avoid editing `settings.default.ron` directly to avoid future conflicts.
+
+Then setup the database:
 
 ```bash
 diesel setup
 diesel migration run
 ```
 
-### Run
+### Running
 
 ```bash
 cargo run
+```
+
+Or run with Docker Compose:
+
+```bash
+docker compose up -d
 ```
 
 ### Test scoring

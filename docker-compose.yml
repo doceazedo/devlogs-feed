@@ -13,7 +13,7 @@ services:
       test:
         [
           "CMD-SHELL",
-          "curl -f http://localhost:$${PORT}/xrpc/app.bsky.feed.getFeedSkeleton?feed=",
+          "curl -f http://localhost:$${PORT:-3030}/xrpc/app.bsky.feed.getFeedSkeleton?feed=",
         ]
       interval: 30s
       timeout: 10s

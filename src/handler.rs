@@ -9,6 +9,7 @@ use crate::scoring::{
     extract_content_signals, has_hashtags, has_keywords, label_boost, FilterResult, MLHandle,
     MediaInfo, PrioritySignals,
 };
+use crate::settings::settings;
 use crate::utils::logs::{self, PostAssessment};
 use chrono::Utc;
 use rand::Rng;
@@ -17,14 +18,6 @@ use skyfeed::{
 };
 use std::cmp::Ordering;
 use std::collections::HashSet;
-
-pub const FEED_CUTOFF_HOURS: i64 = 24 * 7;
-pub const FEED_DEFAULT_LIMIT: usize = 50;
-pub const FEED_MAX_LIMIT: usize = 500;
-pub const MAX_STORED_POSTS: i64 = 5000;
-pub const SHUFFLE_VARIANCE: f32 = 0.05;
-pub const PREFERENCE_BOOST: f32 = 1.5;
-pub const PREFERENCE_PENALTY: f32 = 0.3;
 
 #[derive(Clone)]
 pub struct GameDevFeedHandler {
@@ -147,12 +140,13 @@ impl GameDevFeedHandler {
     }
 
     pub fn cleanup_old_posts(&self) -> Result<usize, diesel::result::Error> {
+        let s = settings();
         let mut conn = self.pool.get().expect("Failed to get connection");
         let now = Utc::now().timestamp();
-        let cutoff = now - (FEED_CUTOFF_HOURS * 3600);
+        let cutoff = now - (s.feed.cutoff_hours * 3600);
 
         let engagement_deleted = self.engagement.cleanup_old_engagement(cutoff).unwrap_or(0);
-        let posts_deleted = db::cleanup_old_posts(&mut conn, cutoff, MAX_STORED_POSTS)?;
+        let posts_deleted = db::cleanup_old_posts(&mut conn, cutoff, s.feed.max_stored_posts)?;
 
         let total_deleted = engagement_deleted + posts_deleted;
         logs::log_cleanup(total_deleted);
@@ -288,8 +282,9 @@ impl FeedHandler for GameDevFeedHandler {
     }
 
     async fn serve_feed(&self, request: FeedRequest) -> FeedResult {
+        let s = settings();
         let now = Utc::now();
-        let cutoff = now.timestamp() - (FEED_CUTOFF_HOURS * 3600);
+        let cutoff = now.timestamp() - (s.feed.cutoff_hours * 3600);
 
         let mut conn = match self.pool.get() {
             Ok(c) => c,
@@ -346,8 +341,8 @@ impl FeedHandler for GameDevFeedHandler {
 
         let limit = request
             .limit
-            .map(|l| (l as usize).min(FEED_MAX_LIMIT))
-            .unwrap_or(FEED_DEFAULT_LIMIT);
+            .map(|l| (l as usize).min(s.feed.max_limit))
+            .unwrap_or(s.feed.default_limit);
 
         let mut rng = rand::rng();
 
@@ -363,16 +358,16 @@ impl FeedHandler for GameDevFeedHandler {
                     .as_ref()
                     .map(|author| {
                         if boosted_authors.contains(author) {
-                            PREFERENCE_BOOST
+                            s.feed.preference_boost
                         } else if penalized_authors.contains(author) {
-                            PREFERENCE_PENALTY
+                            s.feed.preference_penalty
                         } else {
                             1.0
                         }
                     })
                     .unwrap_or(1.0);
 
-                let variance = rng.random_range(-SHUFFLE_VARIANCE..SHUFFLE_VARIANCE);
+                let variance = rng.random_range(-s.feed.shuffle_variance..s.feed.shuffle_variance);
                 let final_score = base_score * preference_modifier * (1.0 + variance);
 
                 (p, final_score)

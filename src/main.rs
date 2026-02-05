@@ -4,12 +4,14 @@ mod engagement;
 mod handler;
 mod schema;
 pub mod scoring;
+pub mod settings;
 pub mod utils;
 
 use anyhow::Result;
 use db::{configure_connection, establish_pool};
 use handler::GameDevFeedHandler;
 use scoring::MLHandle;
+use settings::settings;
 use skyfeed::{start, Config};
 use std::sync::Arc;
 use std::time::Duration;
@@ -20,23 +22,14 @@ use utils::logs;
 async fn main() -> Result<()> {
     dotenvy::dotenv().ok();
 
-    let publisher_did =
-        std::env::var("PUBLISHER_DID").unwrap_or_else(|_| "did:web:example.com".to_string());
-    let hostname = std::env::var("FEED_HOSTNAME").unwrap_or_else(|_| "example.com".to_string());
+    let s = settings();
+    let database_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| "feed.db".to_string());
     let port: u16 = std::env::var("PORT")
         .ok()
         .and_then(|p| p.parse().ok())
         .unwrap_or(3030);
-    let firehose_limit: usize = std::env::var("FIREHOSE_LIMIT")
-        .ok()
-        .and_then(|l| l.parse().ok())
-        .unwrap_or(5000);
-    let database_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| "feed.db".to_string());
-    let enable_backfill = std::env::var("ENABLE_BACKFILL")
-        .map(|v| v == "1" || v.to_lowercase() == "true")
-        .unwrap_or(false);
 
-    logs::log_init(&hostname, port, enable_backfill);
+    logs::log_init(&s.server.feed_hostname, port, s.server.enable_backfill);
 
     let pool = establish_pool(&database_url);
 
@@ -49,7 +42,7 @@ async fn main() -> Result<()> {
     let ml_handle = MLHandle::spawn()?;
     logs::log_ml_ready();
 
-    if enable_backfill {
+    if s.server.enable_backfill {
         backfill::run_backfill(pool.clone(), &ml_handle).await;
     }
 
@@ -76,11 +69,17 @@ async fn main() -> Result<()> {
     });
 
     let config = Config {
-        publisher_did,
-        feed_generator_hostname: hostname.clone(),
+        publisher_did: s.server.publisher_did.clone(),
+        feed_generator_hostname: s.server.feed_hostname.clone(),
     };
 
-    start(config, firehose_limit, handler, ([0, 0, 0, 0], port)).await;
+    start(
+        config,
+        s.server.firehose_limit,
+        handler,
+        ([0, 0, 0, 0], port),
+    )
+    .await;
 
     Ok(())
 }
