@@ -7,13 +7,7 @@ Settings(
     ),
     scoring: Scoring(
         thresholds: ScoringThresholds(
-            score: 0.50,
-            ml_rejection: 0.85,
             min_text_length: 20,
-        ),
-        weights: ScoringWeights(
-            topic: 0.8,
-            semantic: 0.20,
         ),
         bonuses: ContentBonuses(
             first_person: 0.2,
@@ -30,17 +24,6 @@ Settings(
             poor_quality_penalty_min: 0.5,
             good_quality_boost_min: 0.1,
             engagement_boost_min: 0.05,
-        ),
-        confidence: ConfidenceThresholds(
-            strong: 0.85,
-            high: 0.70,
-            moderate: 0.50,
-        ),
-        topic_boosts: TopicBoosts(
-            game_dev_sharing_work: 0.4,
-            game_dev_rant: 0.6,
-            game_programming: 0.2,
-            default: 0.6,
         ),
     ),
     engagement: Engagement(
@@ -73,10 +56,6 @@ Settings(
     backfill: Backfill(
         limit: 200,
         hours: 96,
-    ),
-    decay: Decay(
-        every_x_hours: 2.0,
-        factor: 0.75,
     ),
     filters: Filters(
         gamedev_keywords: [
