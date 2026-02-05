@@ -1,3 +1,5 @@
+// @generated automatically by Diesel CLI.
+
 diesel::table! {
     engagement_cache (post_uri) {
         post_uri -> Text,

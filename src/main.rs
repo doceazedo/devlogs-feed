@@ -9,6 +9,7 @@ pub mod utils;
 
 use anyhow::Result;
 use db::{configure_connection, establish_pool};
+use diesel_migrations::{embed_migrations, EmbeddedMigrations, MigrationHarness};
 use handler::GameDevFeedHandler;
 use scoring::MLHandle;
 use settings::settings;
@@ -17,6 +18,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
 use utils::logs;
+
+const MIGRATIONS: EmbeddedMigrations = embed_migrations!();
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -36,6 +39,8 @@ async fn main() -> Result<()> {
     {
         let mut conn = pool.get().expect("Failed to get initial connection");
         configure_connection(&mut conn).expect("Failed to configure SQLite connection");
+        conn.run_pending_migrations(MIGRATIONS)
+            .expect("Failed to run database migrations");
     }
 
     logs::log_ml_loading();

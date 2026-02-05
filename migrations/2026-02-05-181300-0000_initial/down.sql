@@ -1,0 +1,7 @@
+DROP TABLE IF EXISTS user_interactions;
+DROP TABLE IF EXISTS engagement_cache;
+DROP TABLE IF EXISTS spammers;
+DROP TABLE IF EXISTS replies;
+DROP TABLE IF EXISTS reposts;
+DROP TABLE IF EXISTS likes;
+DROP TABLE IF EXISTS posts;
