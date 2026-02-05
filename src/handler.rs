@@ -3,7 +3,6 @@ use crate::db::{
     NewInteraction, NewLike, NewPost, INTERACTION_REQUEST_LESS, INTERACTION_REQUEST_MORE,
     INTERACTION_SEEN,
 };
-use std::collections::HashSet;
 use crate::engagement::EngagementTracker;
 use crate::scoring::{
     apply_filters, apply_ml_filter, apply_time_decay, calculate_priority, calculate_score,
@@ -17,6 +16,7 @@ use skyfeed::{
     Did, Embed, FeedHandler, FeedRequest, FeedResult, Interaction, InteractionEvent, Post, Uri,
 };
 use std::cmp::Ordering;
+use std::collections::HashSet;
 
 pub const FEED_CUTOFF_HOURS: i64 = 24 * 7;
 pub const FEED_DEFAULT_LIMIT: usize = 50;
